@@ -61,6 +61,10 @@ availabe_examples = {
         "scenario": "example_01f",
         "study_case": "ltm_case",
     },
+    "small_with_steel_plant": {
+        "scenario": "example_04",
+        "study_case": "base_case_steel_plant_2019",
+    },
     # example_01f is used in the tutorial notebook #5: Market configuration comparison example
     # example_01g is used in the tutorial notebook #6: Advanced order types example
     #
@@ -97,7 +101,7 @@ if __name__ == "__main__":
     - timescale: with database and grafana (note: you need docker installed)
     """
     data_format = "local_db"  # "local_db" or "timescale"
-    example = "small"
+    example = "small_with_steel_plant"
 
     if data_format == "local_db":
         db_uri = f"sqlite:///./examples/local_db/assume_db_{example}.db"
