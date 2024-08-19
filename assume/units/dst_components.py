@@ -14,6 +14,8 @@ def create_electrolyser(
     min_operating_time,
     min_down_time,
     efficiency,
+    startup_cost,
+    shutdown_cost,
     time_steps,
     **kwargs,
 ):
@@ -50,13 +52,30 @@ def create_electrolyser(
     model_part.min_operating_time = pyo.Param(initialize=min_operating_time)
     model_part.min_down_time = pyo.Param(initialize=min_down_time)
     model_part.efficiency = pyo.Param(initialize=efficiency)
+    model_part.startup_cost = pyo.Param(initialize=startup_cost)
+    model_part.shutdown_cost = pyo.Param(initialize=shutdown_cost)
 
     # define variables
+    model_part.on = pyo.Var(time_steps, within=pyo.Binary)
+    model_part.startup = pyo.Var(time_steps, within=pyo.Binary)
+    model_part.shutdown = pyo.Var(time_steps, within=pyo.Binary)
     model_part.power_in = pyo.Var(time_steps, within=pyo.NonNegativeReals)
     model_part.hydrogen_out = pyo.Var(time_steps, within=pyo.NonNegativeReals)
     model_part.electrolyser_operating_cost = pyo.Var(
         time_steps, within=pyo.NonNegativeReals
     )
+
+    @model_part.Constraint(time_steps)
+    def startup_constraint(b, t):
+        if t == 0:
+            return pyo.Constraint.Skip
+        return b.startup[t] >= b.on[t] - b.on[t - 1]
+
+    @model_part.Constraint(time_steps)
+    def shutdown_constraint(b, t):
+        if t == 0:
+            return pyo.Constraint.Skip
+        return b.shutdown[t] >= b.on[t - 1] - b.on[t]
 
     # Power bounds constraints
     @model_part.Constraint(time_steps)
@@ -65,7 +84,7 @@ def create_electrolyser(
         Ensures that the power input to the electrolyser does not exceed its rated power capacity.
 
         """
-        return b.power_in[t] <= b.rated_power
+        return b.power_in[t] <= b.rated_power * b.on[t]
 
     @model_part.Constraint(time_steps)
     def power_lower_bound(b, t):
@@ -73,7 +92,7 @@ def create_electrolyser(
         Ensures that the power input to the electrolyser does not fall below the minimum required power.
 
         """
-        return b.power_in[t] >= b.min_power
+        return b.power_in[t] >= b.min_power * b.on[t]
 
     # Ramp-up constraint
     @model_part.Constraint(time_steps)
@@ -172,6 +191,8 @@ def create_electrolyser(
         return (
             b.electrolyser_operating_cost[t]
             == b.power_in[t] * model.electricity_price[t]
+            + b.startup[t] * b.startup_cost
+            + +b.shutdown[t] * b.shutdown_cost
         )
 
     return model_part
