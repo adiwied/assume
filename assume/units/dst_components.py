@@ -68,14 +68,14 @@ def create_electrolyser(
     @model_part.Constraint(time_steps)
     def startup_constraint(b, t):
         if t == 0:
-            return pyo.Constraint.Skip
-        return b.startup[t] >= b.on[t] - b.on[t - 1]
+            return b.startup[t] == b.on[t]
+        return b.startup[t] == b.on[t] - b.on[t - 1]
 
     @model_part.Constraint(time_steps)
     def shutdown_constraint(b, t):
         if t == 0:
             return pyo.Constraint.Skip
-        return b.shutdown[t] >= b.on[t - 1] - b.on[t]
+        return b.shutdown[t] == b.on[t - 1] - b.on[t]
 
     # Power bounds constraints
     @model_part.Constraint(time_steps)
@@ -117,61 +117,22 @@ def create_electrolyser(
         return b.power_in[t - 1] - b.power_in[t] <= b.ramp_down
 
     @model_part.Constraint(time_steps)
-    def min_operating_time_electrolyser_constraint(b, t):
-        if t == 0:
+    def min_up_time_constraint(b, t):
+        if t < b.min_operating_time:
             return pyo.Constraint.Skip
-
-        delta_t = t - (t - 1)
-        min_operating_time_units = int(min_operating_time / delta_t)
-
-        # Check for valid indexing
-        if t < min_operating_time_units:
-            if t - min_operating_time_units + 1 < 0:
-                raise ValueError(
-                    f"Invalid min_operating_time: {min_operating_time} exceeds available time steps. "
-                    "Ensure min_operating_time is compatible with the available time steps."
-                )
-            return (
-                sum(
-                    b.power_in[i]
-                    for i in range(t - min_operating_time_units + 1, t + 1)
-                )
-                >= min_operating_time_units * b.power_in[t]
-            )
-        else:
-            return (
-                sum(
-                    b.power_in[i]
-                    for i in range(t - min_operating_time_units + 1, t + 1)
-                )
-                >= min_operating_time_units * b.power_in[t]
-            )
+        return (
+            sum(b.on[i] for i in range(t - int(b.min_operating_time) + 1, t + 1))
+            >= b.min_operating_time * b.startup[t]
+        )
 
     @model_part.Constraint(time_steps)
-    def min_downtime_electrolyser_constraint(b, t):
-        if t == 0:
+    def min_down_time_constraint(b, t):
+        if t < b.min_down_time:
             return pyo.Constraint.Skip
-
-        delta_t = t - (t - 1)
-        min_downtime_units = int(min_down_time / delta_t)
-
-        # Check for valid indexing
-        if t < min_downtime_units:
-            if t - min_downtime_units < 0:
-                raise ValueError(
-                    f"Invalid min_down_time: {min_down_time} exceeds available time steps. "
-                    "Ensure min_down_time is compatible with the available time steps."
-                )
-            return (
-                sum(b.power_in[t - i] for i in range(min_downtime_units))
-                >= min_downtime_units * b.power_in[t]
-            )
-
-        else:
-            return (
-                sum(b.hydrogen_out[t - i] for i in range(min_downtime_units))
-                >= min_downtime_units * b.power_in[t]
-            )
+        return (
+            sum(1 - b.on[i] for i in range(t - int(b.min_down_time) + 1, t + 1))
+            >= b.min_down_time * b.shutdown[t]
+        )
 
     # Efficiency constraint
     @model_part.Constraint(time_steps)
@@ -192,7 +153,7 @@ def create_electrolyser(
             b.electrolyser_operating_cost[t]
             == b.power_in[t] * model.electricity_price[t]
             + b.startup[t] * b.startup_cost
-            + +b.shutdown[t] * b.shutdown_cost
+            + b.shutdown[t] * b.shutdown_cost
         )
 
     return model_part
