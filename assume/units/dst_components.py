@@ -79,18 +79,13 @@ def create_electrolyser(
 
     # Power bounds constraints
     @model_part.Constraint(time_steps)
-    def power_upper_bound(b, t):
-        """
-        Ensures that the power input to the electrolyser does not exceed its rated power capacity.
-
-        """
+    def power_input_constraint(b, t):
         return b.power_in[t] <= b.rated_power * b.on[t]
 
     @model_part.Constraint(time_steps)
     def power_lower_bound(b, t):
         """
         Ensures that the power input to the electrolyser does not fall below the minimum required power.
-
         """
         return b.power_in[t] >= b.min_power * b.on[t]
 
@@ -99,30 +94,27 @@ def create_electrolyser(
     def ramp_up_constraint(b, t):
         """
         Limits the rate at which the power input to the electrolyser can increase.
-
         """
         if t == 0:
             return pyo.Constraint.Skip
-        return b.power_in[t] - b.power_in[t - 1] <= b.ramp_up
+        return b.power_in[t] - b.power_in[t - 1] <= b.ramp_up * b.on[t]
 
-    # Ramp-down constraint
     @model_part.Constraint(time_steps)
     def ramp_down_constraint(b, t):
         """
         Limits the rate at which the power input to the electrolyser can decrease.
-
         """
         if t == 0:
             return pyo.Constraint.Skip
-        return b.power_in[t - 1] - b.power_in[t] <= b.ramp_down
+        return b.power_in[t - 1] - b.power_in[t] <= b.ramp_down * b.on[t]
 
     @model_part.Constraint(time_steps)
     def min_up_time_constraint(b, t):
         if t < b.min_operating_time:
             return pyo.Constraint.Skip
         return (
-            sum(b.on[i] for i in range(t - int(b.min_operating_time) + 1, t + 1))
-            >= b.min_operating_time * b.startup[t]
+            sum(b.startup[i] for i in range(t - int(b.min_operating_time) + 1, t + 1))
+            <= b.on[t]
         )
 
     @model_part.Constraint(time_steps)
@@ -130,8 +122,8 @@ def create_electrolyser(
         if t < b.min_down_time:
             return pyo.Constraint.Skip
         return (
-            sum(1 - b.on[i] for i in range(t - int(b.min_down_time) + 1, t + 1))
-            >= b.min_down_time * b.shutdown[t]
+            sum(b.shutdown[i] for i in range(t - int(b.min_down_time) + 1, t + 1))
+            <= 1 - b.on[t]
         )
 
     # Efficiency constraint
@@ -151,7 +143,7 @@ def create_electrolyser(
         """
         return (
             b.electrolyser_operating_cost[t]
-            == b.power_in[t] * model.electricity_price[t]
+            == b.power_in[t] * model.electricity_price[t] * b.on[t]
             + b.startup[t] * b.startup_cost
             + b.shutdown[t] * b.shutdown_cost
         )

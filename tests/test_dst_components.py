@@ -64,7 +64,7 @@ def electrolyser_model(electrolyser_config):
 def test_electrolyser_ramping_and_power_bounds(electrolyser_model):
     instance, results = electrolyser_model
 
-    print("Time Step | Hydrogen Out | Power In | Startup | Shutdown | On")
+    print("Time Step | Startup | On | Shutdown | Hydrogen Out | Power In |")
     for t in instance.time_steps:
         hydrogen_out = pyo.value(instance.electrolyser.hydrogen_out[t])
         power_in = pyo.value(instance.electrolyser.power_in[t])
@@ -73,7 +73,7 @@ def test_electrolyser_ramping_and_power_bounds(electrolyser_model):
         on = pyo.value(instance.electrolyser.on[t])
 
         print(
-            f"{t:9} | {hydrogen_out:12} | {power_in:9} | {startup:7} | {shutdown:8} | {on}"
+            f"{t:9}  {startup:7} | {on} | {shutdown:8}  | {hydrogen_out:12} | {power_in:9} |"
         )
 
     # Check ramp-up constraints
