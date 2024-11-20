@@ -625,7 +625,7 @@ class PPO(RLAlgorithm):
         # Compute advantages using Generalized Advantage Estimation (GAE)
         #advantages, returns = self.get_advantages(rewards, values)
 
-        for _ in range(self.gradient_steps):
+        for step in range(self.gradient_steps):
             self.n_updates += 1
 
             transitions, batch_inds = self.learning_role.buffer.sample(self.batch_size)
@@ -642,17 +642,23 @@ class PPO(RLAlgorithm):
                 
                 # Centralized
                 critic = self.learning_role.critics[u_id]
+                critic.optimizer.zero_grad()
+                # Value loss (mean squared error between the predicted values and returns)
+                value_loss = F.mse_loss(returns, values.squeeze())
+                logger.debug(f"value loss: {value_loss}")
+                value_loss.backward()
+                th.nn.utils.clip_grad_norm_(
+                    critic.parameters(), self.max_grad_norm
+                )  # Use self.max_grad_norm     
+                critic.optimizer.step()
+                #if step % 3 == 0:
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
-
 
                 # Evaluate the new log-probabilities and entropy under the current policy
                 action_distribution = actor(states)[1]
                 new_log_probs = action_distribution.log_prob(actions).sum(-1)
                 
-                
-                entropy = action_distribution.entropy().sum(-1)
-
                 # Compute the ratio of new policy to old policy
                 ratio = (new_log_probs - log_probs).exp()
 
@@ -673,37 +679,33 @@ class PPO(RLAlgorithm):
 
                 logger.debug(f"policy_loss: {policy_loss}")
 
-                # Value loss (mean squared error between the predicted values and returns)
-                value_loss = F.mse_loss(returns, values.squeeze())
-
-                logger.debug(f"value loss: {value_loss}")
-
                 # Total loss: policy loss + value loss - entropy bonus
                 # euqation 9 from PPO paper multiplied with -1 to enable minimizing
-                total_loss = (
-                    - policy_loss
-                    + self.vf_coef * value_loss
-                    - self.entropy_coef * entropy.mean()
-                )  # Use self.vf_coef and self.entropy_coef
+                #total_loss = (
+                #    - policy_loss
+                #    + self.vf_coef * value_loss
+                #    - self.entropy_coef * entropy.mean()
+                #)  # Use self.vf_coef and self.entropy_coef
 
-                logger.debug(f"total loss: {total_loss}")
+                #logger.debug(f"total loss: {total_loss}")
 
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
-                critic.optimizer.zero_grad()
-                total_loss.backward(retain_graph=True)
+                policy_loss = th.min(surrogate1, surrogate2).mean()
+
+                entropy = action_distribution.entropy().sum(-1)
+
+                actor_loss = policy_loss - self.entropy_coef * entropy.mean()
+                actor_loss.backward(retain_graph=True)
 
                 # Clip gradients to prevent gradient explosion
                 th.nn.utils.clip_grad_norm_(
                     actor.parameters(), self.max_grad_norm
                 )  # Use self.max_grad_norm
-                th.nn.utils.clip_grad_norm_(
-                    critic.parameters(), self.max_grad_norm
-                )  # Use self.max_grad_norm
 
                 # Perform optimization steps
                 actor.optimizer.step()
-                critic.optimizer.step()
+
 
     
 
