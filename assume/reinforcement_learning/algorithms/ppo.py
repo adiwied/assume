@@ -6,6 +6,7 @@ import logging
 import os
 
 import torch as th
+th.autograd.set_detect_anomaly(True)
 from torch.nn import functional as F
 from torch.optim import Adam
 
@@ -525,78 +526,56 @@ class PPO(RLAlgorithm):
         Returns:
             torch.Tensor: The value of the observation.
         """
-        #counter iterating over all agents for dynamic buffer slice
-        i=0
+        i=0 # counter iterating over all agents for dynamic buffer slice
+        buffer_length = len(states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
+        n_agents = len(self.learning_role.rl_strats)
+        values = th.zeros((buffer_length,n_agents), device=self.device)
 
-        #get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
-        buffer_length = len(states)
-        all_actions = actions.view(buffer_length, -1)
-        # Initialize an empty tensor to store all values
-        all_values = th.empty(0, buffer_length, 1)
-        print(self.learning_role.rl_strats.keys()) # --> works for the centralized way 
-        for u_id in self.learning_role.rl_strats.keys():
+        with th.no_grad():
+            all_actions = actions.view(buffer_length, -1).contiguous()
+            
+            for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
 
-            all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
-        
-            critic = self.learning_role.critics[u_id]
-            # Pass the current states through the critic network to get value estimates.
-            values = critic(all_states, all_actions)
-
-            if  all_values.numel() == 0:
-                all_values = values
-            else:
-                all_values = th.cat((all_values, values), dim=1)
-
-            i=i+1
-
-        return all_values
+                all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
+            
+                # Pass the current states through the critic network to get value estimates.
+                values[:,i] = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
+                
+        return values
 
     def get_advantages(self, rewards, values):
 
         # Compute advantages using Generalized Advantage Estimation (GAE)
-        advantages = []
-        advantage = 0
-        returns = []
+        advantages = th.zeros_like(rewards)
+        returns = th.zeros_like(rewards)
 
+        with th.no_grad():
+            last_gae = 0
         # Iterate through the collected experiences in reverse order to calculate advantages and returns
-        for t in reversed(range(len(rewards))):
-            
-            logger.debug(f"Reward: {t}")    
+            for t in reversed(range(len(rewards))):
+                
+                logger.debug(f"Reward: {t}")    
+                next_value = values[t+1] if t < len(rewards) -1 else 0
 
-            if t == len(rewards) - 1:
-                next_value = 0
-            else:
-                next_value = values[t + 1]
+                # Temporal difference delta Equation 12 from PPO paper
+                delta = rewards[t] + self.gamma * next_value - values[t] # Use self.gamma for discount factor
+                logger.debug(f"Delta: {delta}")
 
-            # Temporal difference delta Equation 12 from PPO paper
-            delta = (
-                - values[t] + rewards[t] + self.gamma * next_value 
-            )  # Use self.gamma for discount factor
+                # GAE advantage Equation 11 from PPO paper
+                advantages[t] = delta + self.gamma * self.gae_lambda * last_gae # Use self.gae_lambda for advantage estimation
+                last_gae = advantages[t]
+                logger.debug(f"Last_advantage: {last_gae}")
+                returns[t] = advantages[t] + values[t]
 
-            logger.debug(f"Delta: {delta}")
+            #Normalize advantages
+            #in accordance with spinning up and mappo version of PPO
+            mean_advantages = th.nanmean(advantages)
+            std_advantages = th.std(advantages)
+            advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
-            # GAE advantage Equation 11 from PPO paper
-            advantage = (
-                delta + self.gamma * self.gae_lambda * advantage
-            )  # Use self.gae_lambda for advantage estimation
+            #TODO: Should we detach here? I though because of normalisation not being included in backward
+            # but unsure if this is correct
 
-            logger.debug(f"Last_advantage: {advantage}")
-
-            advantages.insert(0, advantage)
-            returns.insert(0, advantage + values[t])
-        
-        # Convert advantages and returns to tensors
-        advantages = th.tensor(advantages, dtype=th.float32, device=self.device)
-        returns = th.tensor(returns, dtype=th.float32, device=self.device)
-
-        #Normalize advantages
-        #in accordance with spinning up and mappo version of PPO
-        mean_advantages = th.nanmean(advantages)
-        std_advantages = th.std(advantages)
-        advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
-
-        #TODO: Should we detach here? I though becaus of normalisation not being included in backward
-        # but unsure if this is correct
         return advantages, returns
 
 
@@ -616,6 +595,8 @@ class PPO(RLAlgorithm):
         full_values = self.get_values(full_transitions.observations, full_transitions.actions)
         full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
+        agent_advantages = {}
+        agent_returns = {}
         #states = transitions.observations
         #actions = transitions.actions
         #rewards = transitions.rewards
