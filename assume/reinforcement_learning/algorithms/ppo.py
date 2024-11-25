@@ -531,7 +531,6 @@ class PPO(RLAlgorithm):
         n_agents = len(self.learning_role.rl_strats)
         values = th.zeros((buffer_length,n_agents), device=self.device)
 
-        
         all_actions = actions.view(buffer_length, -1).contiguous()
         
         for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
@@ -542,19 +541,6 @@ class PPO(RLAlgorithm):
                 
         return values
     
-    # Create a list to store values for each agent
-        # value_list = []
-        
-        # all_actions = actions.view(buffer_length, -1).contiguous()
-        
-        # for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
-        #     all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
-        #     agent_values = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
-        #     value_list.append(agent_values)
-        
-        # # Stack instead of in-place assignment
-        # values = th.stack(value_list, dim=1)
-        # return values
 
     def get_advantages(self, rewards, values):
 
@@ -579,15 +565,13 @@ class PPO(RLAlgorithm):
             logger.debug(f"Last_advantage: {last_gae}")
             returns[t] = advantages[t] + values[t]
 
-        #Normalize advantages
-        #in accordance with spinning up and mappo version of PPO
+        #Normalize advantages in accordance with spinning up and mappo version of PPO
         mean_advantages = th.nanmean(advantages)
         std_advantages = th.std(advantages)
         advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
         #TODO: Should we detach here? I though because of normalisation not being included in backward
         # but unsure if this is correct
-
         return advantages, returns
 
 
@@ -600,33 +584,21 @@ class PPO(RLAlgorithm):
         # We will iterate for multiple epochs to update both the policy (actor) and value (critic) networks
         # The number of epochs controls how many times we update using the same collected data (from the buffer).
 
-
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
         
         with th.no_grad():
+            # Pass the current states through the critic network to get value estimates.
             full_values = self.get_values(full_transitions.observations, full_transitions.actions)
+
+            # Compute advantages using Generalized Advantage Estimation (GAE)
             full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
-        agent_advantages = {}
-        agent_returns = {}
-        #states = transitions.observations
-        #actions = transitions.actions
-        #rewards = transitions.rewards
-        #log_probs = transitions.log_probs
-        
-        # Pass the current states through the critic network to get value estimates.
-        #values = self.get_values(states, actions)
-
-        # Compute advantages using Generalized Advantage Estimation (GAE)
-        #advantages, returns = self.get_advantages(rewards, values)
-
         for _ in range(self.gradient_steps):
             self.n_updates += 1
 
             # always use updated values --> check later if best
-
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
             for u_id in self.learning_role.rl_strats.keys():
@@ -644,37 +616,28 @@ class PPO(RLAlgorithm):
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
 
-
                 # Evaluate the new log-probabilities and entropy under the current policy
                 action_distribution = actor(states)[1]
                 new_log_probs = action_distribution.log_prob(actions).sum(-1)
-                
                 
                 entropy = action_distribution.entropy().sum(-1)
 
                 # Compute the ratio of new policy to old policy
                 ratio = (new_log_probs - log_probs).exp()
-
                 logger.debug(f"Ratio: {ratio}")
 
                 # Surrogate loss calculation
                 surrogate1 = ratio * advantages
-                surrogate2 = (
-                    th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-                    * advantages
-                )  # Use self.clip_ratio
-
+                surrogate2 = (th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * advantages)  # Use self.clip_ratio
                 logger.debug(f"surrogate1: {surrogate1}")
                 logger.debug(f"surrogate2: {surrogate2}")
 
                 # Final policy loss (clipped surrogate loss) equation 7 from PPO paper
                 policy_loss = th.min(surrogate1, surrogate2).mean()
-
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
                 value_loss = F.mse_loss(returns, values.squeeze())
-
                 logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
@@ -705,8 +668,6 @@ class PPO(RLAlgorithm):
                 critic.optimizer.step()
 
     
-
-
 def get_actions(rl_strategy, next_observation):
     """
     Gets actions for a unit based on the observation using PPO.
@@ -757,6 +718,4 @@ def get_actions(rl_strategy, next_observation):
 
 
     return sampled_action, log_prob_action
-
-
 
