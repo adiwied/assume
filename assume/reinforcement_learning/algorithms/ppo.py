@@ -531,50 +531,62 @@ class PPO(RLAlgorithm):
         n_agents = len(self.learning_role.rl_strats)
         values = th.zeros((buffer_length,n_agents), device=self.device)
 
-        with th.no_grad():
-            all_actions = actions.view(buffer_length, -1).contiguous()
-            
-            for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
+        
+        all_actions = actions.view(buffer_length, -1).contiguous()
+        
+        for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
+            all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
 
-                all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
-            
-                # Pass the current states through the critic network to get value estimates.
-                values[:,i] = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
+            # Pass the current states through the critic network to get value estimates.
+            values[:,i] = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
                 
         return values
+    
+    # Create a list to store values for each agent
+        # value_list = []
+        
+        # all_actions = actions.view(buffer_length, -1).contiguous()
+        
+        # for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
+        #     all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
+        #     agent_values = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
+        #     value_list.append(agent_values)
+        
+        # # Stack instead of in-place assignment
+        # values = th.stack(value_list, dim=1)
+        # return values
 
     def get_advantages(self, rewards, values):
 
         # Compute advantages using Generalized Advantage Estimation (GAE)
         advantages = th.zeros_like(rewards)
         returns = th.zeros_like(rewards)
-
-        with th.no_grad():
-            last_gae = 0
+        last_gae = 0
+        
         # Iterate through the collected experiences in reverse order to calculate advantages and returns
-            for t in reversed(range(len(rewards))):
-                
-                logger.debug(f"Reward: {t}")    
-                next_value = values[t+1] if t < len(rewards) -1 else 0
+        for t in reversed(range(len(rewards))):
+            
+            logger.debug(f"Reward: {t}")    
+            next_value = values[t+1] if t < len(rewards) -1 else 0
 
-                # Temporal difference delta Equation 12 from PPO paper
-                delta = rewards[t] + self.gamma * next_value - values[t] # Use self.gamma for discount factor
-                logger.debug(f"Delta: {delta}")
+            # Temporal difference delta Equation 12 from PPO paper
+            delta = rewards[t] + self.gamma * next_value - values[t] # Use self.gamma for discount factor
+            logger.debug(f"Delta: {delta}")
 
-                # GAE advantage Equation 11 from PPO paper
-                advantages[t] = delta + self.gamma * self.gae_lambda * last_gae # Use self.gae_lambda for advantage estimation
-                last_gae = advantages[t]
-                logger.debug(f"Last_advantage: {last_gae}")
-                returns[t] = advantages[t] + values[t]
+            # GAE advantage Equation 11 from PPO paper
+            advantages[t] = delta + self.gamma * self.gae_lambda * last_gae # Use self.gae_lambda for advantage estimation
+            last_gae = advantages[t]
+            logger.debug(f"Last_advantage: {last_gae}")
+            returns[t] = advantages[t] + values[t]
 
-            #Normalize advantages
-            #in accordance with spinning up and mappo version of PPO
-            mean_advantages = th.nanmean(advantages)
-            std_advantages = th.std(advantages)
-            advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
+        #Normalize advantages
+        #in accordance with spinning up and mappo version of PPO
+        mean_advantages = th.nanmean(advantages)
+        std_advantages = th.std(advantages)
+        advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
-            #TODO: Should we detach here? I though because of normalisation not being included in backward
-            # but unsure if this is correct
+        #TODO: Should we detach here? I though because of normalisation not being included in backward
+        # but unsure if this is correct
 
         return advantages, returns
 
@@ -592,8 +604,10 @@ class PPO(RLAlgorithm):
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
-        full_values = self.get_values(full_transitions.observations, full_transitions.actions)
-        full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
+        
+        with th.no_grad():
+            full_values = self.get_values(full_transitions.observations, full_transitions.actions)
+            full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
         agent_advantages = {}
         agent_returns = {}
@@ -611,18 +625,20 @@ class PPO(RLAlgorithm):
         for _ in range(self.gradient_steps):
             self.n_updates += 1
 
-            transitions, batch_inds = self.learning_role.buffer.sample(self.batch_size)
-            states = transitions.observations
-            actions = transitions.actions
-            log_probs = transitions.log_probs
-            advantages = full_advantages[batch_inds]
-            returns = full_returns[batch_inds]
-            values = self.get_values(states, actions)  # always use updated values --> check later if best
+            # always use updated values --> check later if best
 
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
             for u_id in self.learning_role.rl_strats.keys():
                 
+                transitions, batch_inds = self.learning_role.buffer.sample(self.batch_size)
+                states = transitions.observations
+                actions = transitions.actions
+                log_probs = transitions.log_probs
+                advantages = full_advantages[batch_inds]
+                returns = full_returns[batch_inds]
+                values = self.get_values(states, actions)
+
                 # Centralized
                 critic = self.learning_role.critics[u_id]
                 # Decentralized
