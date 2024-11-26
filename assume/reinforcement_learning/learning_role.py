@@ -61,7 +61,22 @@ class Learning(Role):
             learning_config["device"] if th.cuda.is_available() else "cpu"
         )
 
-        self.learning_rate = learning_config["learning_rate"]
+        if self.rl_algorithm_name == "matd3":
+            self.learning_rate = learning_config["learning_rate"]
+
+        elif self.rl_algorithm_name == "ppo":
+            self.actor_learning_rate = learning_config.get("ppo", {}).get(
+                "actor_learning_rate", learning_config["learning_rate"]
+                )
+            self.critic_learning_rate = learning_config.get("ppo",{}).get(
+                "critic_learning_rate", learning_config["learning_rate"]
+                )
+        
+        self.actor_scheduler = learning_config.get("ppo", {}).get("actor_lr_scheduler", "none")
+        self.critic_scheduler = learning_config.get("ppo", {}).get("critic_lr_scheduler", "none")        
+        self.actor_scheduler_params = learning_config.get("ppo", {}).get("actor_lr_scheduler_params", {})
+        self.critic_scheduler_params = learning_config.get("ppo", {}).get("critic_lr_scheduler_params", {})
+
         self.actor_architecture = learning_config.get(self.rl_algorithm_name, {}).get(
             "actor_architecture", "mlp"
         )
@@ -279,7 +294,8 @@ class Learning(Role):
         elif algorithm == "ppo":
             self.rl_algorithm = PPO(
                 learning_role=self,
-                learning_rate=self.learning_rate,
+                actor_learning_rate=self.actor_learning_rate,
+                critic_learning_rate=self.critic_learning_rate,
                 gamma=self.gamma,  # Discount factor
                 gradient_steps=self.gradient_steps,  # Number of epochs for policy updates
                 clip_ratio=self.clip_ratio,  # PPO-specific clipping parameter
@@ -288,6 +304,10 @@ class Learning(Role):
                 max_grad_norm=self.max_grad_norm,  # Maximum gradient norm for clipping
                 gae_lambda=self.gae_lambda,  # Lambda for Generalized Advantage Estimation (GAE)
                 actor_architecture=self.actor_architecture,  # Actor network architecture
+                actor_lr_scheduler=self.actor_scheduler,
+                critic_lr_scheduler=self.critic_scheduler,
+                actor_lr_scheduler_kwargs=self.actor_scheduler_params,
+                critic_lr_scheduler_kwargs=self.critic_scheduler_params,
             )
         else:
             logger.error(f"Learning algorithm {algorithm} not implemented!")

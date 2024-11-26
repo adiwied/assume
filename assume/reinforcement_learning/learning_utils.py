@@ -10,6 +10,16 @@ from typing import TypedDict
 import numpy as np
 import torch as th
 
+# check which ones are needed later
+import logging
+from typing import Optional, Dict, Type, Union
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import (
+    _LRScheduler,
+    StepLR,
+    ExponentialLR,
+)
+
 
 # TD3 and PPO
 class ObsActRew(TypedDict):
@@ -187,3 +197,51 @@ def collect_obs_for_central_critic(
 #     return total_timesteps
 
 
+def create_lr_scheduler(
+        optimizer: Optimizer, 
+        scheduler_type: str,
+        scheduler_kwargs: Optional[dict] = None
+        ):
+    """
+    Creates a learning rate scheduler for the optimization algorithm
+    Args:
+        optimizer
+        scheduler_type:
+            - "none"
+            - "step"
+            - "exp"
+        scheduler_kwargs: 
+            - step: {"step_size": int, "gamma": float}
+            - exp: {"gamma": float}
+    """
+    scheduler_kwargs = scheduler_kwargs or {}
+    
+    SCHEDULER_CONFIG = {
+        "step": {
+            "class": StepLR,
+            "required_kwargs": {"step_size", "gamma"}
+        },
+        "exp": {
+            "class": ExponentialLR,
+            "required_kwargs": {"gamma"}
+        }
+    }
+
+    if scheduler_type.lower() == "none":
+        return None
+    
+    if scheduler_type not in SCHEDULER_CONFIG:
+        raise ValueError(f"unsuported scheduler type {scheduler_type}")
+    
+    scheduler_conf = SCHEDULER_CONFIG[scheduler_type]
+    scheduler_class = scheduler_conf["class"]
+    required_kwargs = scheduler_conf["required_kwargs"]
+    missing_kwargs = required_kwargs - set(scheduler_kwargs.keys())
+
+    if missing_kwargs:
+        raise ValueError(f"missing kwargs: {missing_kwargs}")
+
+    scheduler = scheduler_class(optimizer, **scheduler_kwargs)
+
+    return scheduler
+    
