@@ -46,7 +46,7 @@ class PPO(RLAlgorithm):
         max_grad_norm: float,  # Gradient clipping value
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
-        actor_lr_scheduler: str = "none",
+        scheduler_type: str = "none",
         critic_lr_scheduler: str = "none",
         actor_lr_scheduler_kwargs: dict = None,
         critic_lr_scheduler_kwargs: dict = None,
@@ -69,8 +69,8 @@ class PPO(RLAlgorithm):
 
         self.actor_learning_rate = actor_learning_rate
         self.critic_learning_rate = critic_learning_rate
-        self.actor_lr_scheduler_type = actor_lr_scheduler
-        self.critic_lr_scheduler_type = critic_lr_scheduler
+        self.scheduler_type = scheduler_type
+        print(f"using {self.scheduler_type} scheduler")
         self.actor_lr_scheduler_kwargs = actor_lr_scheduler_kwargs or {}
         self.critic_lr_scheduler_kwargs = critic_lr_scheduler_kwargs or {}
 
@@ -380,10 +380,10 @@ class PPO(RLAlgorithm):
             obs_dim_list.append(unit_strategy.obs_dim)
             act_dim_list.append(unit_strategy.act_dim)
 
-        if self.actor_lr_scheduler_type != "none":
+        if self.scheduler_type != "none":
             self.actor_scheduler = create_lr_scheduler(
                 optimizer=actor_optimizers[0],
-                scheduler_type=self.actor_lr_scheduler_type,
+                scheduler_type=self.scheduler_type,
                 scheduler_kwargs=self.actor_lr_scheduler_kwargs
                 )
 
@@ -477,10 +477,10 @@ class PPO(RLAlgorithm):
             critic_optimizers.append(self.learning_role.critics[u_id].optimizer)
             unique_obs_dim_list.append(strategy.unique_obs_dim)
         
-        if self.critic_lr_scheduler_type != "none":
+        if self.scheduler_type != "none":
             self.critic_scheduler = create_lr_scheduler(
             optimizer=critic_optimizers[0],  
-            scheduler_type=self.critic_lr_scheduler_type,
+            scheduler_type=self.scheduler_type,
             scheduler_kwargs=self.critic_lr_scheduler_kwargs
         )
 
@@ -701,20 +701,21 @@ class PPO(RLAlgorithm):
                 actor.optimizer.step()
                 critic.optimizer.step()
 
-                if self.actor_scheduler is not None:
-                    self.actor_scheduler.step()
-                    new_lr = self.actor_scheduler.get_last_lr()[0]
-                    for u_id in self.learning_role.rl_strats.keys():
-                        for param_group in self.learning_role.rl_strats[u_id].actor.optimizer.param_groups:
-                            param_group["lr"] = new_lr
+            if self.actor_scheduler is not None:
+                self.actor_scheduler.step()
+                new_lr = self.actor_scheduler.get_last_lr()[0]
+                for u_id in self.learning_role.rl_strats.keys():
+                    for param_group in self.learning_role.rl_strats[u_id].actor.optimizer.param_groups:
+                        param_group["lr"] = new_lr
 
-                if self.critic_scheduler is not None:
-                    self.critic_scheduler.step()
-                    # Update all critic optimizers to match the scheduled learning rate
-                    new_lr = self.critic_scheduler.get_last_lr()[0]
-                    for u_id in self.learning_role.critics.keys():
-                        for param_group in self.learning_role.critics[u_id].optimizer.param_groups:
-                            param_group['lr'] = new_lr
+            if self.critic_scheduler is not None:
+                self.critic_scheduler.step()
+                # Update all critic optimizers to match the scheduled learning rate
+                new_lr = self.critic_scheduler.get_last_lr()[0]
+                print(f"current lr: {new_lr}")
+                for u_id in self.learning_role.critics.keys():
+                    for param_group in self.learning_role.critics[u_id].optimizer.param_groups:
+                        param_group['lr'] = new_lr
     
 def get_actions(rl_strategy, next_observation):
     """

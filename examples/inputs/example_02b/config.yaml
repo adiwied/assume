@@ -87,11 +87,12 @@ base_ppo:
       
       actor_learning_rate: 0.0003 #allow for separate learning rates of actor and critic
       critic_learning_rate: 0.0003
+      scheduler_type: step
       actor_lr_scheduler_params:
-        step_size: 30    # Number of iterations for a complete cosine cycle
-        gamma: 0.95 # Minimum learning rate
-      critic_lr_scheduler_params:
         step_size: 30 # Number of epochs between learning rate decays
+        gamma: 0.95   # 1 - decay in learning rate 
+      critic_lr_scheduler_params:
+        step_size: 30 
         gamma: 0.95  
 
   markets_config:

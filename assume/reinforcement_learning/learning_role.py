@@ -72,8 +72,7 @@ class Learning(Role):
                 "critic_learning_rate", learning_config["learning_rate"]
                 )
         
-        self.actor_scheduler = learning_config.get("ppo", {}).get("actor_lr_scheduler", "none")
-        self.critic_scheduler = learning_config.get("ppo", {}).get("critic_lr_scheduler", "none")        
+        self.scheduler_type = learning_config.get("ppo", {}).get("scheduler_type", "none")
         self.actor_scheduler_params = learning_config.get("ppo", {}).get("actor_lr_scheduler_params", {})
         self.critic_scheduler_params = learning_config.get("ppo", {}).get("critic_lr_scheduler_params", {})
 
@@ -304,8 +303,7 @@ class Learning(Role):
                 max_grad_norm=self.max_grad_norm,  # Maximum gradient norm for clipping
                 gae_lambda=self.gae_lambda,  # Lambda for Generalized Advantage Estimation (GAE)
                 actor_architecture=self.actor_architecture,  # Actor network architecture
-                actor_lr_scheduler=self.actor_scheduler,
-                critic_lr_scheduler=self.critic_scheduler,
+                scheduler_type=self.scheduler_type,
                 actor_lr_scheduler_kwargs=self.actor_scheduler_params,
                 critic_lr_scheduler_kwargs=self.critic_scheduler_params,
             )
