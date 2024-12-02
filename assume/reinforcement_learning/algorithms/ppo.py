@@ -67,8 +67,6 @@ class PPO(RLAlgorithm):
         self.n_updates = 0  # Number of updates performed
         self.batch_size = learning_role.batch_size 
 
-        self.actor_learning_rate = actor_learning_rate
-        self.critic_learning_rate = critic_learning_rate
         self.scheduler_type = scheduler_type
         print(f"using {self.scheduler_type} scheduler")
         self.actor_lr_scheduler_kwargs = actor_lr_scheduler_kwargs or {}
@@ -76,6 +74,7 @@ class PPO(RLAlgorithm):
 
         self.actor_scheduler = None #proceed with one scheduler for all agents 
         self.critic_scheduler = None
+        
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(

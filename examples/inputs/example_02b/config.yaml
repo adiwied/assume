@@ -87,7 +87,7 @@ base_ppo:
       
       actor_learning_rate: 0.0003 #allow for separate learning rates of actor and critic
       critic_learning_rate: 0.0003
-      scheduler_type: step
+      scheduler_type: none
       actor_lr_scheduler_params:
         step_size: 30 # Number of epochs between learning rate decays
         gamma: 0.95   # 1 - decay in learning rate 
