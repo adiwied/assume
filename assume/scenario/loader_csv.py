@@ -402,7 +402,7 @@ def read_units(
                 id=unit_name,
                 unit_type=unit_type,
                 unit_operator_id=operator_id,
-                unit_params=unit_params,
+                unit_params=unit_params.to_dict(),
                 forecaster=forecaster,
             )
         )
@@ -519,13 +519,14 @@ def load_config_and_create_forecaster(
     forecaster.set_forecast(temperature_df)
     forecaster.calc_forecast_if_needed()
 
+    forecaster.convert_forecasts_to_fast_series()
+
     return {
         "config": config,
         "sim_id": sim_id,
         "path": path,
         "start": start,
         "end": end,
-        "index": index,
         "powerplant_units": powerplant_units,
         "storage_units": storage_units,
         "demand_units": demand_units,
@@ -555,7 +556,7 @@ def setup_world(
         scenario_data (dict): A dictionary containing the configuration and loaded files for the scenario and study case.
         study_case (str): The specific study case within the scenario to be loaded.
         perform_evaluation (bool, optional): A flag indicating whether evaluation should be performed. Defaults to False.
-        terminate_learning (bool, optional): An automatically set flag indicating that we terminated the learning process now, either because we reach the end of the episode itteration or because we triggered an early stopping.
+        terminate_learning (bool, optional): An automatically set flag indicating that we terminated the learning process now, either because we reach the end of the episode iteration or because we triggered an early stopping.
         episode (int, optional): The episode number for learning. Defaults to 0.
         eval_episode (int, optional): The episode number for evaluation. Defaults to 0.
 
@@ -570,13 +571,13 @@ def setup_world(
     config = scenario_data["config"]
     start = scenario_data["start"]
     end = scenario_data["end"]
-    index = scenario_data["index"]
     powerplant_units = scenario_data["powerplant_units"]
     storage_units = scenario_data["storage_units"]
     demand_units = scenario_data["demand_units"]
     dsm_units = scenario_data["dsm_units"]
     forecaster = scenario_data["forecaster"]
 
+    # save every thousand steps by default to free up memory
     save_frequency_hours = config.get("save_frequency_hours", 48)
     # Disable save frequency if CSV export is enabled
     if world.export_csv_path and save_frequency_hours is not None:
@@ -587,7 +588,7 @@ def setup_world(
         )
 
         # If PostgreSQL database is in use, warn the user about end-of-simulation saving
-        if world.db is not None and "postgresql" in world.db.name:
+        if world.db_uri is not None and "postgresql" in world.db_uri:
             logger.warning(
                 "Data will be stored in the PostgreSQL database only at the end of the simulation due to CSV export being enabled. "
                 "Disable CSV export to save data at regular intervals (export_csv_path = '')."
@@ -632,7 +633,6 @@ def setup_world(
         simulation_id=sim_id,
         learning_config=learning_config,
         bidding_params=bidding_strategy_params,
-        index=index,
         forecaster=forecaster,
     )
 
@@ -702,7 +702,7 @@ def setup_world(
         units[op].extend(op_units)
 
     # if distributed_role is true - there is a manager available
-    # and we cann add each units_operator as a separate process
+    # and we can add each units_operator as a separate process
     if world.distributed_role is True:
         logger.info("Adding unit operators and units - with subprocesses")
         for op, op_units in units.items():
@@ -749,7 +749,7 @@ def load_scenario_folder(
         scenario (str): The name of the scenario to be loaded.
         study_case (str): The specific study case within the scenario to be loaded.
         perform_evaluation (bool, optional): A flag indicating whether evaluation should be performed. Defaults to False.
-        terminate_learning (bool, optional): An automatically set flag indicating that we terminated the learning process now, either because we reach the end of the episode itteration or because we triggered an early stopping.
+        terminate_learning (bool, optional): An automatically set flag indicating that we terminated the learning process now, either because we reach the end of the episode iteration or because we triggered an early stopping.
         episode (int, optional): The episode number for learning. Defaults to 0.
         eval_episode (int, optional): The episode number for evaluation. Defaults to 0.
 
@@ -869,11 +869,11 @@ def run_learning(
     world.export_csv_path = ""
 
     actors_and_critics = None
-    world.learning_role.initialize_policy(
-        actors_and_critics=actors_and_critics
-    )  # Leads to the initialization of the Learning role, makes world.learning_role.rl_algorithm_name accessible
-    world.output_role.del_similar_runs()
+    world.learning_role.initialize_policy(actors_and_critics=actors_and_critics) # Leads to the initialization of the Learning role, makes world.learning_role.rl_algorithm_name accessible
+    
+    world.output_role.delete_similar_runs()
 
+    # check if we already stored policies for this simulation
     save_path = world.learning_config["trained_policies_save_path"]
 
     if Path(save_path).is_dir():
@@ -915,20 +915,8 @@ def run_learning(
         "eval_episodes_done": 0,
     }
 
-    if world.learning_role.rl_algorithm_name == "matd3":
-        # In MATD3, noise_scale is relevant because it adds noise to the actions taken by the agents
-        # during exploration. This is essential in deterministic policy gradient methods like TD3 and MATD3,
-        # where the agents need to explore the environment sufficiently to avoid getting stuck in local optima.
-        # Noise is added to the actions to encourage exploration. In contrast, PPO uses stochastic policies
-        # that naturally explore the environment by sampling actions from a probability distribution, making
-        # external noise addition unnecessary.
-        # TODO: delete noise scale here as new sheduler makes it obsolete in future, leave like this now
-        inter_episodic_data["noise_scale"] = world.learning_config.get(
-            "noise_scale", 1.0
-        )
+    # -----------------------------------------
 
-    # if world.learning_role.rl_algorithm_name == "matd3":
-    # Sets the validation interval: After how many episodes does validation take place
     validation_interval = min(
         world.learning_role.training_episodes,
         validation_interval_from_config,
@@ -952,6 +940,8 @@ def run_learning(
                 episode=episode,
             )
 
+        # -----------------------------------------
+        # Give the newly initialized learning role the needed information across episodes
         world.learning_role.load_inter_episodic_data(inter_episodic_data)
 
         world.run()  # triggers calculate_bids()
@@ -985,12 +975,16 @@ def run_learning(
 
             if world.learning_role.rl_algorithm_name == "matd3":
                 total_rewards = world.output_role.get_sum_reward()
+
+                if len(total_rewards) == 0:
+                    raise AssumeException("No rewards were collected during evaluation run")
                 avg_reward = np.mean(total_rewards)
                 terminate = world.learning_role.compare_and_save_policies(
                     {"avg_reward": avg_reward}
                 )
 
             if world.learning_role.rl_algorithm_name == "ppo":
+                # TODO: add surrogate loss as a parameter to compare_and_save_policies
                 # PPO uses the surrogate loss to monitor policy updates.
                 # The surrogate loss quantifies how much the new policy has changed compared to the old one.
                 # If the surrogate loss becomes too small or too large, it can indicate issues:
@@ -1007,7 +1001,6 @@ def run_learning(
                 # terminate = world.learning_role.compare_and_save_policies({"surrogate_loss": surrogate_loss})
 
                 # Reset the PPO Rollout Buffer after each update
-                # TODO: add surrogate loss as a parameter to compare_and_save_policies
                 inter_episodic_data["buffer"].reset()
 
                 total_rewards = world.output_role.get_sum_reward()

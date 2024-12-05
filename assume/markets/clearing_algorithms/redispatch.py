@@ -73,8 +73,10 @@ class RedispatchMarketRole(MarketRole):
         self.solver = marketconfig.param_dict.get("solver", "highs")
         if self.solver == "gurobi":
             self.solver_options = {"LogToConsole": 0, "OutputFlag": 0}
-        elif self.solver == "highs":
+        elif self.solver == "appsi_highs":
             self.solver_options = {"output_flag": False, "log_to_console": False}
+        else:
+            self.solver_options = {}
 
         # set the market clearing principle
         # as pay as bid or pay as clear
@@ -178,7 +180,7 @@ class RedispatchMarketRole(MarketRole):
         # run linear powerflow
         redispatch_network.lpf()
 
-        # check lines for congestion where power flow is larget than s_nom
+        # check lines for congestion where power flow is larger than s_nom
         line_loading = (
             redispatch_network.lines_t.p0.abs() / redispatch_network.lines.s_nom
         )
@@ -191,6 +193,9 @@ class RedispatchMarketRole(MarketRole):
                 status, termination_condition = redispatch_network.optimize(
                     solver_name=self.solver,
                     solver_options=self.solver_options,
+                    # do not show tqdm progress bars for large grids
+                    # https://github.com/PyPSA/linopy/pull/375
+                    progress=False,
                 )
 
             if status != "ok":
@@ -218,7 +223,10 @@ class RedispatchMarketRole(MarketRole):
                 calculate_network_meta(network=redispatch_network, product=product, i=i)
             )
 
-        return accepted_orders, rejected_orders, meta
+        # write network flows here if applicable
+        flows = []
+
+        return accepted_orders, rejected_orders, meta, flows
 
     def process_dispatch_data(self, network: pypsa.Network, orderbook_df: pd.DataFrame):
         """

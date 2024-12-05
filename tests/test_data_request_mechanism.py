@@ -10,9 +10,9 @@ from dateutil import rrule as rr
 from dateutil.relativedelta import relativedelta as rd
 from mango import (
     Agent,
-    AgentAddress,
     RoleAgent,
     activate,
+    addr,
     create_acl,
     create_ec_container,
 )
@@ -41,13 +41,13 @@ class DataRequester(Agent):
         await self.send_message(
             create_acl(
                 content,
-                receiver_addr=AgentAddress(receiver_addr, receiver_id),
+                receiver_addr=addr(receiver_addr, receiver_id),
                 sender_addr=self.addr,
                 acl_metadata={
                     "reply_with": reply_with,
                 },
             ),
-            receiver_addr=AgentAddress(receiver_addr, receiver_id),
+            receiver_addr=addr(receiver_addr, receiver_id),
         )
 
         return await self.await_message
@@ -75,16 +75,16 @@ async def test_request_messages():
     units_agent.add_role(units_role)
 
     index = pd.date_range(start=start, end=end + pd.Timedelta(hours=4), freq="1h")
-
+    forecaster = NaiveForecast(index, demand=1000)
     params_dict = {
         "bidding_strategies": {"EOM": NaiveSingleBidStrategy()},
         "technology": "energy",
         "unit_operator": "test_operator",
         "max_power": 1000,
         "min_power": 0,
-        "forecaster": NaiveForecast(index, demand=1000),
+        "forecaster": forecaster,
     }
-    unit = Demand("testdemand", index=index, **params_dict)
+    unit = Demand("testdemand", index=forecaster.index, **params_dict)
     units_role.add_unit(unit)
 
     market_role = MarketRole(marketconfig)

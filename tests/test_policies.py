@@ -10,14 +10,15 @@ from dateutil import rrule as rr
 from dateutil.relativedelta import relativedelta as rd
 from mango import (
     Agent,
-    AgentAddress,
     RoleAgent,
     activate,
+    addr,
     create_acl,
     create_ec_container,
 )
 from mango.util.clock import ExternalClock
 
+from assume.common.fast_pandas import FastIndex
 from assume.common.forecasts import NaiveForecast
 from assume.common.market_objects import MarketConfig, MarketProduct
 from assume.common.units_operator import UnitsOperator
@@ -41,13 +42,13 @@ class DataRequester(Agent):
         await self.send_message(
             create_acl(
                 content,
-                receiver_addr=AgentAddress(receiver_addr, receiver_id),
+                receiver_addr=addr(receiver_addr, receiver_id),
                 sender_addr=self.addr,
                 acl_metadata={
                     "reply_with": reply_with,
                 },
             ),
-            receiver_addr=AgentAddress(receiver_addr, receiver_id),
+            receiver_addr=addr(receiver_addr, receiver_id),
         )
 
         return await self.await_message
@@ -74,7 +75,7 @@ async def test_request_messages():
     units_agent.add_role(units_role)
     container.register(units_agent, suggested_aid="test_operator")
 
-    index = pd.date_range(start=start, end=end + pd.Timedelta(hours=4), freq="1h")
+    index = FastIndex(start=start, end=end + pd.Timedelta(hours=4), freq="1h")
 
     params_dict = {
         "bidding_strategies": {"energy": NaiveSingleBidStrategy()},
@@ -84,7 +85,7 @@ async def test_request_messages():
         "min_power": 0,
         "forecaster": NaiveForecast(index, demand=1000),
     }
-    unit = Demand("testdemand", index=index, **params_dict)
+    unit = Demand("testdemand", **params_dict)
     units_role.add_unit(unit)
 
     market_role = MarketRole(marketconfig)

@@ -38,7 +38,7 @@ def load_pypsa(
         marketdesign (list[MarketConfig]): description of the market design which will be used with the scenario
     """
     index = network.snapshots
-    index.freq = "h"
+    index.freq = index.inferred_freq
     start = index[0]
     end = index[-1]
     sim_id = f"{scenario}_{study_case}"
@@ -49,7 +49,6 @@ def load_pypsa(
         end=end,
         save_frequency_hours=save_frequency_hours,
         simulation_id=sim_id,
-        index=index,
     )
     # setup eom market
 
@@ -156,7 +155,7 @@ def load_pypsa(
                 "efficiency_charge": storage.efficiency_store,
                 "efficiency_discharge": storage.efficiency_dispatch,
                 "initial_soc": storage.state_of_charge_initial,
-                "max_volume": storage.p_nom,
+                "max_soc": storage.p_nom,
                 "bidding_strategies": bidding_strategies[storage.name],
                 "technology": "hydro",
                 "emission_factor": 0,
