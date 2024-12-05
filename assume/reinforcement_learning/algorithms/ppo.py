@@ -8,6 +8,7 @@ import os
 import torch as th
 from torch.nn import functional as F
 from torch.optim import Adam
+import numpy as np
 
 from assume.common.base import LearningStrategy
 from assume.reinforcement_learning.algorithms.base_algorithm import RLAlgorithm
@@ -319,11 +320,15 @@ class PPO(RLAlgorithm):
             # self.learning_role.target_critics = actors_and_critics["target_critics"]
             for u_id, unit_strategy in self.learning_role.rl_strats.items():
                 unit_strategy.actor = actors_and_critics["actors"][u_id]
+                with th.no_grad():
+                    current_std = np.exp(unit_strategy.actor.log_std)
+                    print(f"\n current actor std: {current_std}")
                 # unit_strategy.actor_target = actors_and_critics["actor_targets"][u_id]
 
             self.obs_dim = actors_and_critics["obs_dim"]
             self.act_dim = actors_and_critics["act_dim"]
             self.unique_obs_dim = actors_and_critics["unique_obs_dim"]
+        
 
     # Removed actor_target in comparison to MATD3
     def create_actors(self) -> None:
@@ -680,30 +685,31 @@ class PPO(RLAlgorithm):
 
                 # Total loss: policy loss + value loss - entropy bonus
                 # euqation 9 from PPO paper multiplied with -1 to enable minimizing
-                total_loss = (
-                    - policy_loss
-                    + self.vf_coef * value_loss
-                    - self.entropy_coef * entropy.mean()
-                )  # Use self.vf_coef and self.entropy_coef
+                # total_loss = (
+                #     - policy_loss
+                #     + self.vf_coef * value_loss
+                #     - self.entropy_coef * entropy.mean()
+                # )  # Use self.vf_coef and self.entropy_coef
 
-                logger.debug(f"total loss: {total_loss}")
+                #
+                # logger.debug(f"total loss: {total_loss}")
 
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
-                critic.optimizer.zero_grad()
-                total_loss.backward(retain_graph=True)
-
-                # Clip gradients to prevent gradient explosion
-                th.nn.utils.clip_grad_norm_(
-                    actor.parameters(), self.max_grad_norm
-                )  # Use self.max_grad_norm
-                th.nn.utils.clip_grad_norm_(
-                    critic.parameters(), self.max_grad_norm
-                )  # Use self.max_grad_norm
-
-                # Perform optimization steps
+                policy_loss.backward(retain_graph=True)
+                th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 actor.optimizer.step()
+
+                critic.optimizer.zero_grad()
+                value_loss.backward(retain_graph=True)
+                th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 critic.optimizer.step()
+                # total_loss.backward(retain_graph=True)
+                # Clip gradients to prevent gradient explosion
+                # Perform optimization steps
+                
+                
+        
 
     
 

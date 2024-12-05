@@ -121,7 +121,7 @@ class CriticPPO(nn.Module):
             self.FC_4 = nn.Linear(128, 1, dtype=float_type)
 
         for layer in [self.FC_1, self.FC_2, self.FC_3, self.FC_4]:
-            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+            nn.init.orthogonal_(layer.weight, gain=5/3)
             nn.init.constant_(layer.bias, 0.0)
 
     def forward(self, obs, actions):
@@ -134,9 +134,9 @@ class CriticPPO(nn.Module):
 
         xu = th.cat([obs, actions], dim=-1)
 
-        x = F.relu(self.FC_1(xu))
-        x = F.relu(self.FC_2(x))
-        x = F.relu(self.FC_3(x))
+        x = F.tanh(self.FC_1(xu))
+        x = F.tanh(self.FC_2(x))
+        x = F.tanh(self.FC_3(x))
         value = self.FC_4(x)
 
         return value
@@ -182,11 +182,12 @@ class DistActor(MLPActor):
     def __init__(self, obs_dim: int, act_dim: int, float_type, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
 
-        #self.initialize_weights(final_gain=0.1)
+        self.log_std = nn.Parameter(th.full((act_dim,), np.log(0.1), dtype=float_type))
+        self.initialize_weights(final_gain=0.5)
 
-    def initialize_weights(self, final_gain=np.sqrt(2)):
+    def initialize_weights(self, final_gain=5/3):
         for layer in [self.FC1, self.FC2]:
-            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+            nn.init.orthogonal_(layer.weight, gain=5/3)
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
@@ -194,19 +195,21 @@ class DistActor(MLPActor):
 
 
     def forward(self, obs):
-        x = F.relu(self.FC1(obs))
-        x = F.relu(self.FC2(x))
+        x = F.tanh(self.FC1(obs))
+        x = F.tanh(self.FC2(x))
         # Works with MATD3, output of softsign: [-1, 1]
-        x = F.softsign(self.FC3(x))
-        
+        x = F.tanh(self.FC3(x))
+
+        log_std = th.clamp(self.log_std, min=np.log(0.05), max=np.log(0.15))
+        std = log_std.exp()
         # x = th.tanh(self.FC3(x))
 
         # Tested for PPO, scales the output to [0, 1] range
         #x = th.sigmoid(self.FC3(x))
 
         # Create a normal distribution for continuous actions (with assumed standard deviation of 
-        # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?)
-        dist = th.distributions.Normal(x, 0.1) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
+        # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?) (0.1 DOES NOT WORK!!!)
+        dist = th.distributions.Normal(x, std) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
                 
         return x, dist
 
