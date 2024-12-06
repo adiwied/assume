@@ -9,6 +9,7 @@ import torch as th
 from torch.nn import functional as F
 from torch.optim import Adam
 import numpy as np
+th.autograd.set_detect_anomaly(True)
 
 from assume.common.base import LearningStrategy
 from assume.reinforcement_learning.algorithms.base_algorithm import RLAlgorithm
@@ -60,7 +61,9 @@ class PPO(RLAlgorithm):
         self.gae_lambda = gae_lambda
         self.n_updates = 0  # Number of updates performed
         self.batch_size = learning_role.batch_size 
-
+        self.value_mean = th.zeros(1, device=self.device)
+        self.value_std = th.ones(1, device=self.device)
+        self.value_normalizer_momentum = 0.99
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(
@@ -552,14 +555,27 @@ class PPO(RLAlgorithm):
 
             i=i+1
 
-        return all_values
+            normalized_values = (all_values - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device=self.device))
 
-    def get_advantages(self, rewards, values):
+        return normalized_values
+    
+
+    def denormalize_values(self, normalized_values):
+        """
+        converts normalized values back to original scale 
+        """
+        with th.no_grad():
+            denormalized_values = self.value_mean + normalized_values *self.value_std
+        return denormalized_values
+
+    def get_advantages(self, rewards, normalized_values):
 
         # Compute advantages using Generalized Advantage Estimation (GAE)
         advantages = []
         advantage = 0
         returns = []
+
+        values = self.denormalize_values(normalized_values)
 
         # Iterate through the collected experiences in reverse order to calculate advantages and returns
         for t in reversed(range(len(rewards))):
@@ -597,6 +613,7 @@ class PPO(RLAlgorithm):
         mean_advantages = th.nanmean(advantages)
         std_advantages = th.std(advantages)
         advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
+        returns = (returns - returns.mean()) / (returns.std() + 1e-5)
 
         #TODO: Should we detach here? I though becaus of normalisation not being included in backward
         # but unsure if this is correct
@@ -616,7 +633,9 @@ class PPO(RLAlgorithm):
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
-        full_values = self.get_values(full_transitions.observations, full_transitions.actions)
+        
+        normalized_full_values = self.get_values(full_transitions.observations, full_transitions.actions)
+        full_values = self.denormalize_values(normalized_full_values)
         full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
         #states = transitions.observations
@@ -639,12 +658,17 @@ class PPO(RLAlgorithm):
             log_probs = transitions.log_probs
             advantages = full_advantages[batch_inds]
             returns = full_returns[batch_inds]
-            values = self.get_values(states, actions)  # always use updated values --> check later if best
+            normalized_values = self.get_values(states, actions)  # always use updated values --> check later if best
+            values = self.denormalize_values(normalized_values)
 
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
             for u_id in self.learning_role.rl_strats.keys():
                 
+                with th.no_grad():
+                    self.value_mean = self.value_normalizer_momentum * self.value_mean + (1 - self.value_normalizer_momentum) * values.mean()
+                    self.value_std = self.value_normalizer_momentum * self.value_std + (1 - self.value_normalizer_momentum) * values.std()
+
                 # Centralized
                 critic = self.learning_role.critics[u_id]
                 # Decentralized
@@ -674,12 +698,13 @@ class PPO(RLAlgorithm):
                 logger.debug(f"surrogate2: {surrogate2}")
 
                 # Final policy loss (clipped surrogate loss) equation 7 from PPO paper
-                policy_loss = th.min(surrogate1, surrogate2).mean()
+                policy_loss = th.min(surrogate1, surrogate2).mean() * (-1.0)
 
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
-                value_loss = F.mse_loss(returns, values.squeeze())
+                normalized_returns = (returns - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device = self.device))
+                value_loss = F.mse_loss(normalized_returns, normalized_values.squeeze())
 
                 logger.debug(f"value loss: {value_loss}")
 
@@ -696,23 +721,121 @@ class PPO(RLAlgorithm):
 
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
-                policy_loss.backward(retain_graph=True)
+                policy_loss.backward()
+                if self.n_updates%50 == 0:
+                    self.log_gradient_metrics(actor, 'policy', self.max_grad_norm, ratio, new_log_probs, log_probs)
+
                 th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 actor.optimizer.step()
-
+                
                 critic.optimizer.zero_grad()
-                value_loss.backward(retain_graph=True)
+                value_loss.backward()
+                if self.n_updates%30 == 0:
+                    self.log_gradient_metrics(critic, 'value', self.max_grad_norm, values=values, returns=returns)
+ 
                 th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 critic.optimizer.step()
                 # total_loss.backward(retain_graph=True)
                 # Clip gradients to prevent gradient explosion
                 # Perform optimization steps
-                
-                
-        
-
     
 
+    # Track the gradients for diagnostics 
+    def log_gradient_metrics(self, network, loss_type, max_grad_norm, ratio=None, new_log_probs=None, old_log_probs=None, values=None, returns=None):
+        """
+        Log detailed gradient metrics and perform gradient clipping.
+        """
+        with th.no_grad():
+            # Get pre-clipping norm
+            total_norm_pre = sum(p.grad.norm().item() ** 2 for p in network.parameters() if p.grad is not None) ** 0.5
+            
+        # Perform gradient clipping
+            th.nn.utils.clip_grad_norm_(network.parameters(), max_grad_norm)
+        
+        with th.no_grad():
+            # Get post-clipping norm
+            total_norm_post = sum(p.grad.norm().item() ** 2 for p in network.parameters() if p.grad is not None) ** 0.5
+
+            print(f"\n=== {loss_type.capitalize()} Network Gradient Diagnostics ===")
+            print(f"Gradient norm - Before clip: {total_norm_pre:.6f}, After clip: {total_norm_post:.6f}")
+            if total_norm_pre > total_norm_post:
+                print(f"Gradient clipping reduced norm by: {(total_norm_pre - total_norm_post):.6f}")
+
+            if loss_type == 'policy':
+                # Actor-specific diagnostics
+                if hasattr(network, 'log_std'):
+                    log_std_grad = network.log_std.grad
+                    std_value = network.log_std.exp()
+                    log_std_grad_norm = log_std_grad.norm().item() if log_std_grad is not None else 0.0
+                    print(f"Log STD gradient norm: {log_std_grad_norm:.6f}")
+                    print(f"Current STD range: {std_value.min().item():.6f} to {std_value.max().item():.6f}")
+
+                # Check tanh layers
+                for name, param in network.named_parameters():
+                    if 'FC' in name and param.grad is not None:
+                        grad_abs_mean = param.grad.abs().mean().item()
+                        print(f"{name} mean gradient: {grad_abs_mean:.6f}")
+
+                # PPO-specific metrics
+                if ratio is not None:
+                    ratio_mean = ratio.mean().item()
+                    ratio_std = ratio.std().item()
+                    ratio_min = ratio.min().item()
+                    ratio_max = ratio.max().item()
+                    print(f"\nPPO Ratio Statistics:")
+                    print(f"Ratio - Mean: {ratio_mean:.6f}, Std: {ratio_std:.6f}")
+                    print(f"Ratio - Min: {ratio_min:.6f}, Max: {ratio_max:.6f}")
+
+                if new_log_probs is not None and old_log_probs is not None:
+                    log_prob_diff = new_log_probs - old_log_probs
+                    print("\nLog Prob Difference Statistics:")
+                    print(f"Mean: {log_prob_diff.mean().item():.6f}")
+                    print(f"Std: {log_prob_diff.std().item():.6f}")
+
+            elif loss_type == 'value':
+                if values is not None and returns is not None:
+                    # Ensure consistent shapes first
+                    values_flat = values.squeeze()
+                    
+                    print("\nValue Prediction Stats:")
+                    print(f"Values - Mean: {values_flat.mean().item():.3f}, Std: {values_flat.std().item():.3f}")
+                    print(f"Returns - Mean: {returns.mean().item():.3f}, Std: {returns.std().item():.3f}")
+                    print(f"Max Value-Return Diff: {(values_flat - returns).abs().max().item():.3f}")
+                    
+                    # Calculate correlation with consistent shapes
+                    v_mean = values_flat.mean()
+                    v_std = values_flat.std()
+                    r_mean = returns.mean()
+                    r_std = returns.std()
+                    v_centered = values_flat - v_mean
+                    r_centered = returns - r_mean
+                    numerator = (v_centered * r_centered).mean()
+                    value_return_corr = numerator / (v_std * r_std + 1e-8)
+                    
+                    print(f"Value-Return Correlation: {value_return_corr.item():.3f}")
+                    print("\nCorrelation Debug:")
+                    print(f"Values shape: {values_flat.shape}, Returns shape: {returns.shape}")
+                    print(f"V_centered mean: {v_centered.mean():.6f} (should be ~0)")
+                    print(f"R_centered mean: {r_centered.mean():.6f} (should be ~0)")
+                    print(f"Numerator: {numerator:.6f}")
+                    print(f"Denominator: {(v_std * r_std):.6f}")
+
+                    # Check tanh layers
+                    for name, param in network.named_parameters():
+                        if 'FC' in name and param.grad is not None:
+                            grad_abs_mean = param.grad.abs().mean().item()
+                            print(f"{name} mean gradient: {grad_abs_mean:.6f}")
+
+            # Alert for potential issues
+            if total_norm_pre > 10:
+                print(f"WARNING: Large {loss_type} gradients before clipping!")
+            if total_norm_post > max_grad_norm + 1e-3:
+                print(f"WARNING: Gradient clipping may not be working properly!")
+            if total_norm_post < 1e-6:
+                print(f"WARNING: Very small {loss_type} gradients detected!")
+                
+            return total_norm_post  # Return the clipped gradient norm
+                    
 
 def get_actions(rl_strategy, next_observation):
     """
@@ -764,6 +887,4 @@ def get_actions(rl_strategy, next_observation):
 
 
     return sampled_action, log_prob_action
-
-
 

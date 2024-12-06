@@ -121,7 +121,7 @@ class CriticPPO(nn.Module):
             self.FC_4 = nn.Linear(128, 1, dtype=float_type)
 
         for layer in [self.FC_1, self.FC_2, self.FC_3, self.FC_4]:
-            nn.init.orthogonal_(layer.weight, gain=5/3)
+            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
             nn.init.constant_(layer.bias, 0.0)
 
     def forward(self, obs, actions):
@@ -134,9 +134,9 @@ class CriticPPO(nn.Module):
 
         xu = th.cat([obs, actions], dim=-1)
 
-        x = F.tanh(self.FC_1(xu))
-        x = F.tanh(self.FC_2(x))
-        x = F.tanh(self.FC_3(x))
+        x = F.relu(self.FC_1(xu))
+        x = F.relu(self.FC_2(x))
+        x = F.relu(self.FC_3(x))
         value = self.FC_4(x)
 
         return value
@@ -185,9 +185,9 @@ class DistActor(MLPActor):
         self.log_std = nn.Parameter(th.full((act_dim,), np.log(0.1), dtype=float_type))
         self.initialize_weights(final_gain=0.5)
 
-    def initialize_weights(self, final_gain=5/3):
+    def initialize_weights(self, final_gain=np.sqrt(2)):
         for layer in [self.FC1, self.FC2]:
-            nn.init.orthogonal_(layer.weight, gain=5/3)
+            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
@@ -195,10 +195,10 @@ class DistActor(MLPActor):
 
 
     def forward(self, obs):
-        x = F.tanh(self.FC1(obs))
-        x = F.tanh(self.FC2(x))
+        x = F.relu(self.FC1(obs))
+        x = F.relu(self.FC2(x))
         # Works with MATD3, output of softsign: [-1, 1]
-        x = F.tanh(self.FC3(x))
+        x = F.softsign(self.FC3(x))
 
         log_std = th.clamp(self.log_std, min=np.log(0.05), max=np.log(0.15))
         std = log_std.exp()
