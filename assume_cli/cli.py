@@ -15,6 +15,9 @@ from pathlib import Path
 import argcomplete
 import yaml
 from sqlalchemy import make_url
+import time as time
+
+import wandb
 
 
 def db_uri_completer(prefix, parsed_args, **kwargs):
@@ -156,6 +159,9 @@ def cli(args=None):
             scenario=args.scenario,
             study_case=args.case_study,
         )
+        # set up the wandb run
+        _setup_wandb(world.learning_config)
+        
 
         if world.learning_config.get("learning_mode", False):
             run_learning(
@@ -171,6 +177,78 @@ def cli(args=None):
         pass
     except Exception:
         logging.exception("Simulation aborted")
+
+
+def _setup_wandb(learning_config):
+        if wandb.run is not None:
+            return
+        
+        try:
+            # Try to read API key from file
+            try:
+                with open('wandb_key.txt', 'r') as f:
+                    wandb.login(key=f.read().strip(), relogin=True)
+            except FileNotFoundError:
+                print("Warning: wandb_key.txt not found. Attempting to use existing credentials.")
+            except Exception as e:
+                print(f"Warning: Failed to read wandb API key: {e}")
+
+            run_config = {
+                "algorithm": {
+                    "name": learning_config["algorithm"],
+                    "learning_rate": learning_config["learning_rate"],
+                    "batch_size": learning_config["ppo"]["batch_size"],
+                    "gamma": learning_config["ppo"]["gamma"],
+                    "gradient_steps": learning_config["gradient_steps"]
+                },
+                "architecture": {
+                    "actor": learning_config["ppo"]["actor_architecture"],
+                    "device": str(learning_config["device"])
+                },
+                "training": {
+                    "total_episodes": learning_config["training_episodes"],
+                    "train_freq": learning_config["ppo"]["train_freq"],
+                    #": learning_config["episodes_collecting_initial_experience"]
+                }
+            }
+
+            run_config["algorithm"].update({
+                "clip_ratio": learning_config["ppo"]["clip_ratio"],
+                "entropy_coef": learning_config["ppo"]["entropy_coef"],
+                "value_coeff": learning_config["ppo"]["vf_coef"],
+                "max_grad_norm": learning_config["ppo"]["max_grad_norm"],
+                "gae_lambda": learning_config["ppo"]["gae_lambda"]
+            })
+
+            run_name = f"ppo_{learning_config["ppo"]["batch_size"]}_{learning_config["learning_rate"]}_{time.time()}"
+            
+            if learning_config["perform_evaluation"]:
+                run_name += "_eval"
+            
+            wandb.init(
+                project="ASSUME-PPO",
+                name=run_name, 
+                config=run_config,
+                group=learning_config.get("experiment_group", None),  # Group related runs
+                tags=[
+                    "ppo",
+                    f"batch_{learning_config["ppo"]["batch_size"]}",
+                    "evaluation" if learning_config["perform_evaluation"] else "training",
+                    # learning_config.get("custom_tag", None)
+                ],
+                mode="offline" if learning_config.get("wandb_offline", False) else "online",
+                settings=wandb.Settings(
+                    start_method="thread",
+                    _disable_stats=True  # Disable system stats collection
+                    , 
+                ),
+            )
+            # Log code-saving configuration
+            wandb.run.log_code = True  # Save source code
+                        
+        except Exception as e:
+            print(f"Failed to initialize wandb: {e}") 
+            print("Continuing without logging")
 
 
 if __name__ == "__main__":

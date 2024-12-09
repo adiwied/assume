@@ -16,7 +16,7 @@ from assume.reinforcement_learning.algorithms.base_algorithm import RLAlgorithm
 from assume.reinforcement_learning.neural_network_architecture import CriticPPO
 from assume.reinforcement_learning.learning_utils import collect_obs_for_central_critic
 
-
+import wandb 
 logger = logging.getLogger(__name__)
 
 
@@ -64,11 +64,13 @@ class PPO(RLAlgorithm):
         self.value_mean = th.zeros(1, device=self.device)
         self.value_std = th.ones(1, device=self.device)
         self.value_normalizer_momentum = 0.99
+        self.wandb_step = 0
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(
                 "PPO only supports the 'dist' actor architecture. Please define 'dist' as actor architecture in config."
             )
+        
 
     # Unchanged method from MATD3
     def save_params(self, directory):
@@ -519,6 +521,12 @@ class PPO(RLAlgorithm):
 
         return actors_and_critics
     
+
+    def set_wandb_step(self, step: int) -> None:
+            """Set the wandb step counter to continue from a loaded state."""
+            self.wandb_step = step
+
+
     def get_values(self, states, actions):
         """
         Gets values for a unit based on the observation using PPO.
@@ -725,7 +733,7 @@ class PPO(RLAlgorithm):
                 if self.n_updates%50 == 0:
                     self.log_gradient_metrics(actor, 'policy', self.max_grad_norm, ratio, new_log_probs, log_probs)
 
-                th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
+                policy_grad_norm = th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 actor.optimizer.step()
                 
                 critic.optimizer.zero_grad()
@@ -733,11 +741,98 @@ class PPO(RLAlgorithm):
                 if self.n_updates%30 == 0:
                     self.log_gradient_metrics(critic, 'value', self.max_grad_norm, values=values, returns=returns)
  
-                th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
+                
+                value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 critic.optimizer.step()
+
+                clip_fraction = th.mean((th.abs(ratio - 1) > self.clip_ratio).float()).item()
+                approx_kl_div = th.mean(new_log_probs - log_probs).item()
                 # total_loss.backward(retain_graph=True)
                 # Clip gradients to prevent gradient explosion
                 # Perform optimization steps
+                
+                if self.learning_role.learning_mode and wandb.run is not None:
+                    with th.no_grad():
+                        try:
+                            policy_norm_pre = sum(p.grad.norm().item() ** 2 for p in actor.parameters() if p.grad is not None) ** 0.5
+                            value_norm_pre = sum(p.grad.norm().item() ** 2 for p in critic.parameters() if p.grad is not None) ** 0.5
+                            policy_grad_norm = th.nn.utils.clip_grad_norm_(actor.parameters(), self.max_grad_norm).item()
+                            value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm).item()
+
+                            # Core Training Progress
+                            training_metrics = {
+                                "training/policy_loss": policy_loss.item(),
+                                "training/value_loss": value_loss.item(),
+                                "training/learning_rate": self.learning_rate,
+                                "training/entropy": entropy.mean().item(),
+                                "training/approx_kl": approx_kl_div,
+                                "training/clip_fraction": clip_fraction,
+                            }
+
+                            # Episode Performance
+                            rewards_tensor = full_transitions.rewards.clone().detach()
+                            episode_metrics = {
+                                "episode/cumulative_reward": rewards_tensor.sum().item(),
+                                "episode/mean_reward": rewards_tensor.mean().item(),
+                                "episode/episode_num": self.learning_role.episodes_done,
+                            }
+
+                            # Value Estimation
+                            values_flat = values.squeeze()
+                            td_errors = values_flat - returns
+                            
+                            # Calculate correlation
+                            v_mean = values_flat.mean()
+                            v_std = values_flat.std()
+                            r_mean = returns.mean()
+                            r_std = returns.std()
+                            v_centered = values_flat - v_mean
+                            r_centered = returns - r_mean
+                            correlation = (v_centered * r_centered).mean() / (v_std * r_std + 1e-8)
+
+                            value_metrics = {
+                                "value/mean_td_error": td_errors.mean().item(),
+                                "value/explained_variance": 1 - (td_errors.var() / (returns.var() + 1e-8)).item(),
+                                "value/predicted_mean": values_flat.mean().item(),
+                                "value/actual_returns_mean": returns.mean().item(),
+                                "value/max_difference": td_errors.abs().max().item(),
+                                "value/correlation": correlation.item(),
+                            }
+
+                            # Policy Updates
+                            policy_metrics = {
+                                "policy/mean_ratio": ratio.mean().item(),
+                                "policy/mean_action": actions.mean().item(),
+                                "policy/action_std": actions.std().item(),
+                            }
+
+                            # Training Stability
+                            stability_metrics = {
+                                "stability/advantage_mean": advantages.mean().item(),
+                                "stability/advantage_std": advantages.std().item(),
+                                "stability/policy_grad_pre_clip": policy_norm_pre,
+                                "stability/policy_grad_post_clip": policy_grad_norm,
+                                "stability/value_grad_pre_clip": value_norm_pre,
+                                "stability/value_grad_post_clip": value_grad_norm,
+                                "stability/policy_clip_ratio": policy_grad_norm / (policy_norm_pre + 1e-8),
+                                "stability/value_clip_ratio": value_grad_norm / (value_norm_pre + 1e-8),
+                            }
+
+                            # Combine all metrics
+                            metrics = {}
+                            metrics.update(training_metrics)
+                            metrics.update(episode_metrics)
+                            metrics.update(value_metrics)
+                            metrics.update(policy_metrics)
+                            metrics.update(stability_metrics)
+
+                            # Log everything in a single call
+                            self.wandb_step = self.wandb_step + 1
+                            self.learning_role.wandb_step = self.wandb_step
+                            wandb.log(metrics, step=self.wandb_step)
+
+                        except Exception as e:
+                            print(f"Warning: Failed to log metrics: {e}")
     
 
     # Track the gradients for diagnostics 

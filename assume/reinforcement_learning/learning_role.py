@@ -123,6 +123,7 @@ class Learning(Role):
         self.rl_eval = defaultdict(list)
         # List of avg changes
         self.avg_rewards = []
+        self.wandb_step = 0
 
     # TD3 and PPO
     def load_inter_episodic_data(self, inter_episodic_data):
@@ -140,6 +141,11 @@ class Learning(Role):
         self.rl_eval = inter_episodic_data["all_eval"]
         self.avg_rewards = inter_episodic_data["avg_all_eval"]
         self.buffer = inter_episodic_data["buffer"]
+        self.wandb_step = inter_episodic_data.get("wandb_step", 0)
+        
+        # Set step counter in the algorithm instance
+        if hasattr(self.rl_algorithm, 'set_wandb_step'):
+            self.rl_algorithm.set_wandb_step(self.wandb_step)
 
         if self.rl_algorithm_name == "matd3":
             # if enough initial experience was collected according to specifications in learning config
@@ -169,6 +175,7 @@ class Learning(Role):
             "buffer": self.buffer,
             "actors_and_critics": self.rl_algorithm.extract_policy(),
             "noise_scale": self.get_noise_scale(),
+            "wandb_step" : self.wandb_step
         }
 
     # TD3 and PPO
