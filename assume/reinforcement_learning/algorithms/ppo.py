@@ -730,18 +730,11 @@ class PPO(RLAlgorithm):
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
                 policy_loss.backward()
-                if self.n_updates%50 == 0:
-                    self.log_gradient_metrics(actor, 'policy', self.max_grad_norm, ratio, new_log_probs, log_probs)
-
                 policy_grad_norm = th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 actor.optimizer.step()
                 
                 critic.optimizer.zero_grad()
                 value_loss.backward()
-                if self.n_updates%30 == 0:
-                    self.log_gradient_metrics(critic, 'value', self.max_grad_norm, values=values, returns=returns)
- 
-                
                 value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 critic.optimizer.step()
 
