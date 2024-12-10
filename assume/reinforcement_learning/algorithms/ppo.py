@@ -641,11 +641,17 @@ class PPO(RLAlgorithm):
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
-        
         normalized_full_values = self.get_values(full_transitions.observations, full_transitions.actions)
         full_values = self.denormalize_values(normalized_full_values)
         full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
+        n_minibatches = 10 # adjust later
+        mean_policy_losses = []
+        mean_value_losses = []
+        mean_entropy_losses = []
+
+        mb_size = self.batch_size // n_minibatches
+        print(f"n_minibatches: {n_minibatches}, batch_size: {self.batch_size}, mb_size: {mb_size}")
         #states = transitions.observations
         #actions = transitions.actions
         #rewards = transitions.rewards
@@ -657,175 +663,186 @@ class PPO(RLAlgorithm):
         # Compute advantages using Generalized Advantage Estimation (GAE)
         #advantages, returns = self.get_advantages(rewards, values)
 
-        for _ in range(self.gradient_steps):
+        for epoch in range(self.gradient_steps):
             self.n_updates += 1
+            indices = np.arange(self.batch_size-1)
 
-            transitions, batch_inds = self.learning_role.buffer.sample(self.batch_size)
-            states = transitions.observations
-            actions = transitions.actions
-            log_probs = transitions.log_probs
-            advantages = full_advantages[batch_inds]
-            returns = full_returns[batch_inds]
-            normalized_values = self.get_values(states, actions)  # always use updated values --> check later if best
-            values = self.denormalize_values(normalized_values)
+            np.random.shuffle(indices)
+            for start_idx in range(0, self.batch_size, mb_size):
+                    
+                end_indx = min(start_idx + mb_size, self.batch_size-1)
+                mb_indx = indices[start_idx:end_indx]
+                print(f"using indices {mb_indx} for minibatch")
+                states = full_transitions.observations[mb_indx]
+                actions = full_transitions.actions[mb_indx]
+                log_probs = full_transitions.log_probs[mb_indx]
+                advantages = full_advantages[mb_indx]
+                returns = full_returns[mb_indx]
+                normalized_values = self.get_values(states, actions)  # always use updated values --> check later if best
+                values = self.denormalize_values(normalized_values)
 
-            # Iterate through over each agent's strategy
-            # Each agent has its own actor. Critic (value network) is centralized.
-            for u_id in self.learning_role.rl_strats.keys():
-                
-                with th.no_grad():
-                    self.value_mean = self.value_normalizer_momentum * self.value_mean + (1 - self.value_normalizer_momentum) * values.mean()
-                    self.value_std = self.value_normalizer_momentum * self.value_std + (1 - self.value_normalizer_momentum) * values.std()
-
-                # Centralized
-                critic = self.learning_role.critics[u_id]
-                # Decentralized
-                actor = self.learning_role.rl_strats[u_id].actor
-
-
-                # Evaluate the new log-probabilities and entropy under the current policy
-                action_distribution = actor(states)[1]
-                new_log_probs = action_distribution.log_prob(actions).sum(-1)
-                
-                
-                entropy = action_distribution.entropy().sum(-1)
-
-                # Compute the ratio of new policy to old policy
-                ratio = (new_log_probs - log_probs).exp()
-
-                logger.debug(f"Ratio: {ratio}")
-
-                # Surrogate loss calculation
-                surrogate1 = ratio * advantages
-                surrogate2 = (
-                    th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-                    * advantages
-                )  # Use self.clip_ratio
-
-                logger.debug(f"surrogate1: {surrogate1}")
-                logger.debug(f"surrogate2: {surrogate2}")
-
-                # Final policy loss (clipped surrogate loss) equation 7 from PPO paper
-                policy_loss = th.min(surrogate1, surrogate2).mean() * (-1.0)
-
-                logger.debug(f"policy_loss: {policy_loss}")
-
-                # Value loss (mean squared error between the predicted values and returns)
-                normalized_returns = (returns - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device = self.device))
-                value_loss = F.mse_loss(normalized_returns, normalized_values.squeeze())
-
-                logger.debug(f"value loss: {value_loss}")
-
-                # Total loss: policy loss + value loss - entropy bonus
-                # euqation 9 from PPO paper multiplied with -1 to enable minimizing
-                # total_loss = (
-                #     - policy_loss
-                #     + self.vf_coef * value_loss
-                #     - self.entropy_coef * entropy.mean()
-                # )  # Use self.vf_coef and self.entropy_coef
-
-                #
-                # logger.debug(f"total loss: {total_loss}")
-
-                # Zero the gradients and perform backpropagation for both actor and critic
-                actor.optimizer.zero_grad()
-                policy_loss.backward()
-                policy_grad_norm = th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
-                actor.optimizer.step()
-                
-                critic.optimizer.zero_grad()
-                value_loss.backward()
-                value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
-                critic.optimizer.step()
-
-                clip_fraction = th.mean((th.abs(ratio - 1) > self.clip_ratio).float()).item()
-                approx_kl_div = th.mean(new_log_probs - log_probs).item()
-                # total_loss.backward(retain_graph=True)
-                # Clip gradients to prevent gradient explosion
-                # Perform optimization steps
-                
-                if self.learning_role.learning_mode and wandb.run is not None:
+                # Iterate through over each agent's strategy
+                # Each agent has its own actor. Critic (value network) is centralized.
+                for u_id in self.learning_role.rl_strats.keys():
+                    
                     with th.no_grad():
-                        try:
-                            policy_norm_pre = sum(p.grad.norm().item() ** 2 for p in actor.parameters() if p.grad is not None) ** 0.5
-                            value_norm_pre = sum(p.grad.norm().item() ** 2 for p in critic.parameters() if p.grad is not None) ** 0.5
-                            policy_grad_norm = th.nn.utils.clip_grad_norm_(actor.parameters(), self.max_grad_norm).item()
-                            value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm).item()
+                        self.value_mean = self.value_normalizer_momentum * self.value_mean + (1 - self.value_normalizer_momentum) * values.mean()
+                        self.value_std = self.value_normalizer_momentum * self.value_std + (1 - self.value_normalizer_momentum) * values.std()
 
-                            # Core Training Progress
-                            training_metrics = {
-                                "training/policy_loss": policy_loss.item(),
-                                "training/value_loss": value_loss.item(),
-                                "training/learning_rate": self.learning_rate,
-                                "training/entropy": entropy.mean().item(),
-                                "training/approx_kl": approx_kl_div,
-                                "training/clip_fraction": clip_fraction,
-                            }
+                    # Centralized
+                    critic = self.learning_role.critics[u_id]
+                    # Decentralized
+                    actor = self.learning_role.rl_strats[u_id].actor
 
-                            # Episode Performance
-                            rewards_tensor = full_transitions.rewards.clone().detach()
-                            episode_metrics = {
-                                "episode/cumulative_reward": rewards_tensor.sum().item(),
-                                "episode/mean_reward": rewards_tensor.mean().item(),
-                                "episode/episode_num": self.learning_role.episodes_done,
-                            }
 
-                            # Value Estimation
-                            values_flat = values.squeeze()
-                            td_errors = values_flat - returns
-                            
-                            # Calculate correlation
-                            v_mean = values_flat.mean()
-                            v_std = values_flat.std()
-                            r_mean = returns.mean()
-                            r_std = returns.std()
-                            v_centered = values_flat - v_mean
-                            r_centered = returns - r_mean
-                            correlation = (v_centered * r_centered).mean() / (v_std * r_std + 1e-8)
+                    # Evaluate the new log-probabilities and entropy under the current policy
+                    action_distribution = actor(states)[1]
+                    new_log_probs = action_distribution.log_prob(actions).sum(-1)
+                    
+                    
+                    entropy = action_distribution.entropy().sum(-1)
 
-                            value_metrics = {
-                                "value/mean_td_error": td_errors.mean().item(),
-                                "value/explained_variance": 1 - (td_errors.var() / (returns.var() + 1e-8)).item(),
-                                "value/predicted_mean": values_flat.mean().item(),
-                                "value/actual_returns_mean": returns.mean().item(),
-                                "value/max_difference": td_errors.abs().max().item(),
-                                "value/correlation": correlation.item(),
-                            }
+                    # Compute the ratio of new policy to old policy
+                    ratio = (new_log_probs - log_probs).exp()
 
-                            # Policy Updates
-                            policy_metrics = {
-                                "policy/mean_ratio": ratio.mean().item(),
-                                "policy/mean_action": actions.mean().item(),
-                                "policy/action_std": actions.std().item(),
-                            }
+                    logger.debug(f"Ratio: {ratio}")
 
-                            # Training Stability
-                            stability_metrics = {
-                                "stability/advantage_mean": advantages.mean().item(),
-                                "stability/advantage_std": advantages.std().item(),
-                                "stability/policy_grad_pre_clip": policy_norm_pre,
-                                "stability/policy_grad_post_clip": policy_grad_norm,
-                                "stability/value_grad_pre_clip": value_norm_pre,
-                                "stability/value_grad_post_clip": value_grad_norm,
-                                "stability/policy_clip_ratio": policy_grad_norm / (policy_norm_pre + 1e-8),
-                                "stability/value_clip_ratio": value_grad_norm / (value_norm_pre + 1e-8),
-                            }
+                    # Surrogate loss calculation
+                    surrogate1 = ratio * advantages
+                    surrogate2 = (
+                        th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
+                        * advantages
+                    )  # Use self.clip_ratio
 
-                            # Combine all metrics
-                            metrics = {}
-                            metrics.update(training_metrics)
-                            metrics.update(episode_metrics)
-                            metrics.update(value_metrics)
-                            metrics.update(policy_metrics)
-                            metrics.update(stability_metrics)
+                    logger.debug(f"surrogate1: {surrogate1}")
+                    logger.debug(f"surrogate2: {surrogate2}")
 
-                            # Log everything in a single call
-                            self.wandb_step = self.wandb_step + 1
-                            self.learning_role.wandb_step = self.wandb_step
-                            wandb.log(metrics, step=self.wandb_step)
+                    # Final policy loss (clipped surrogate loss) equation 7 from PPO paper
+                    policy_loss = th.min(surrogate1, surrogate2).mean() * (-1.0)
 
-                        except Exception as e:
-                            print(f"Warning: Failed to log metrics: {e}")
+                    logger.debug(f"policy_loss: {policy_loss}")
+
+                    # Value loss (mean squared error between the predicted values and returns)
+                    normalized_returns = (returns - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device = self.device))
+                    value_loss = F.mse_loss(normalized_returns, normalized_values.squeeze())
+
+                    logger.debug(f"value loss: {value_loss}")
+
+                    # Total loss: policy loss + value loss - entropy bonus
+                    # euqation 9 from PPO paper multiplied with -1 to enable minimizing
+                    # total_loss = (
+                    #     - policy_loss
+                    #     + self.vf_coef * value_loss
+                    #     - self.entropy_coef * entropy.mean()
+                    # )  # Use self.vf_coef and self.entropy_coef
+
+                    #
+                    # logger.debug(f"total loss: {total_loss}")
+
+                    # Zero the gradients and perform backpropagation for both actor and critic
+                    actor.optimizer.zero_grad()
+                    policy_loss.backward()
+                    with th.no_grad():
+                        policy_norm_pre = sum(p.grad.norm().item() ** 2 for p in actor.parameters() if p.grad is not None) ** 0.5
+                    policy_grad_norm = th.nn.utils.clip_grad_norm_( actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
+                    actor.optimizer.step()
+                    
+                    critic.optimizer.zero_grad()
+                    value_loss.backward()
+                    with th.no_grad():
+                        value_norm_pre = sum(p.grad.norm().item() ** 2 for p in critic.parameters() if p.grad is not None) ** 0.5
+
+                    value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
+                    critic.optimizer.step()
+
+                    clip_fraction = th.mean((th.abs(ratio - 1) > self.clip_ratio).float()).item()
+                    approx_kl_div = th.mean(new_log_probs - log_probs).item()
+                    # total_loss.backward(retain_graph=True)
+                    # Clip gradients to prevent gradient explosion
+                    # Perform optimization steps
+                    
+                    if self.learning_role.learning_mode and wandb.run is not None:
+                        with th.no_grad():
+                            try:
+                                #policy_norm_pre = sum(p.grad.norm().item() ** 2 for p in actor.parameters() if p.grad is not None) ** 0.5
+                                #value_norm_pre = sum(p.grad.norm().item() ** 2 for p in critic.parameters() if p.grad is not None) ** 0.5
+                                #policy_grad_norm = th.nn.utils.clip_grad_norm_(actor.parameters(), self.max_grad_norm).item()
+                                #value_grad_norm = th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm).item()
+
+                                # Core Training Progress
+                                training_metrics = {
+                                    "training/policy_loss": policy_loss.item(),
+                                    "training/value_loss": value_loss.item(),
+                                    "training/learning_rate": self.learning_rate,
+                                    "training/entropy": entropy.mean().item(),
+                                    "training/approx_kl": approx_kl_div,
+                                    "training/clip_fraction": clip_fraction,
+                                }
+
+                                # Episode Performance
+                                rewards_tensor = full_transitions.rewards.clone().detach()
+                                episode_metrics = {
+                                    "episode/cumulative_reward": rewards_tensor.sum().item(),
+                                    "episode/mean_reward": rewards_tensor.mean().item(),
+                                    "episode/episode_num": self.learning_role.episodes_done,
+                                }
+
+                                # Value Estimation
+                                values_flat = values.squeeze()
+                                td_errors = values_flat - returns
+                                
+                                # Calculate correlation
+                                v_mean = values_flat.mean()
+                                v_std = values_flat.std()
+                                r_mean = returns.mean()
+                                r_std = returns.std()
+                                v_centered = values_flat - v_mean
+                                r_centered = returns - r_mean
+                                correlation = (v_centered * r_centered).mean() / (v_std * r_std + 1e-8)
+
+                                value_metrics = {
+                                    "value/mean_td_error": td_errors.mean().item(),
+                                    "value/explained_variance": 1 - (td_errors.var() / (returns.var() + 1e-8)).item(),
+                                    "value/predicted_mean": values_flat.mean().item(),
+                                    "value/actual_returns_mean": returns.mean().item(),
+                                    "value/max_difference": td_errors.abs().max().item(),
+                                    "value/correlation": correlation.item(),
+                                }
+
+                                # Policy Updates
+                                policy_metrics = {
+                                    "policy/mean_ratio": ratio.mean().item(),
+                                    "policy/mean_action": actions.mean().item(),
+                                    "policy/action_std": actions.std().item(),
+                                }
+
+                                # Training Stability
+                                stability_metrics = {
+                                    "stability/advantage_mean": advantages.mean().item(),
+                                    "stability/advantage_std": advantages.std().item(),
+                                    "stability/policy_grad_pre_clip": policy_norm_pre,
+                                    "stability/policy_grad_post_clip": policy_grad_norm,
+                                    "stability/value_grad_pre_clip": value_norm_pre,
+                                    "stability/value_grad_post_clip": value_grad_norm,
+                                    "stability/policy_clip_ratio": policy_grad_norm / (policy_norm_pre + 1e-8),
+                                    "stability/value_clip_ratio": value_grad_norm / (value_norm_pre + 1e-8),
+                                }
+
+                                # Combine all metrics
+                                metrics = {}
+                                metrics.update(training_metrics)
+                                metrics.update(episode_metrics)
+                                metrics.update(value_metrics)
+                                metrics.update(policy_metrics)
+                                metrics.update(stability_metrics)
+
+                                # Log everything in a single call
+                                self.wandb_step = self.wandb_step + 1
+                                self.learning_role.wandb_step = self.wandb_step
+                                wandb.log(metrics, step=self.wandb_step)
+
+                            except Exception as e:
+                                print(f"Warning: Failed to log metrics: {e}")
                     
 
 def get_actions(rl_strategy, next_observation):
