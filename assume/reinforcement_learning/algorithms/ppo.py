@@ -65,6 +65,7 @@ class PPO(RLAlgorithm):
         self.value_std = th.ones(1, device=self.device)
         self.value_normalizer_momentum = 0.99
         self.wandb_step = 0
+        self.value_clip_ratio = 0.4
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(
@@ -563,9 +564,7 @@ class PPO(RLAlgorithm):
 
             i=i+1
 
-            normalized_values = (all_values - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device=self.device))
-
-        return normalized_values
+        return all_values
     
 
     def denormalize_values(self, normalized_values):
@@ -576,14 +575,12 @@ class PPO(RLAlgorithm):
             denormalized_values = self.value_mean + normalized_values *self.value_std
         return denormalized_values
 
-    def get_advantages(self, rewards, normalized_values):
+    def get_advantages(self, rewards, values):
 
         # Compute advantages using Generalized Advantage Estimation (GAE)
         advantages = []
         advantage = 0
         returns = []
-
-        values = self.denormalize_values(normalized_values)
 
         # Iterate through the collected experiences in reverse order to calculate advantages and returns
         for t in reversed(range(len(rewards))):
@@ -621,7 +618,7 @@ class PPO(RLAlgorithm):
         mean_advantages = th.nanmean(advantages)
         std_advantages = th.std(advantages)
         advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
-        returns = (returns - returns.mean()) / (returns.std() + 1e-5)
+        #returns = (returns - returns.mean()) / (returns.std() + 1e-5)
 
         #TODO: Should we detach here? I though becaus of normalisation not being included in backward
         # but unsure if this is correct
@@ -641,8 +638,7 @@ class PPO(RLAlgorithm):
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
-        normalized_full_values = self.get_values(full_transitions.observations, full_transitions.actions)
-        full_values = self.denormalize_values(normalized_full_values)
+        full_values = self.get_values(full_transitions.observations, full_transitions.actions)
         full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
         
         n_minibatches = 10 # adjust later
@@ -678,22 +674,18 @@ class PPO(RLAlgorithm):
                 log_probs = full_transitions.log_probs[mb_indx]
                 advantages = full_advantages[mb_indx]
                 returns = full_returns[mb_indx]
-                normalized_values = self.get_values(states, actions)  # always use updated values --> check later if best
-                values = self.denormalize_values(normalized_values)
+                values = self.get_values(states, actions)  # always use updated values --> check later if best
+                with th.no_grad():
+                    old_values = full_values[mb_indx]
 
                 # Iterate through over each agent's strategy
                 # Each agent has its own actor. Critic (value network) is centralized.
                 for u_id in self.learning_role.rl_strats.keys():
                     
-                    with th.no_grad():
-                        self.value_mean = self.value_normalizer_momentum * self.value_mean + (1 - self.value_normalizer_momentum) * values.mean()
-                        self.value_std = self.value_normalizer_momentum * self.value_std + (1 - self.value_normalizer_momentum) * values.std()
-
                     # Centralized
                     critic = self.learning_role.critics[u_id]
                     # Decentralized
                     actor = self.learning_role.rl_strats[u_id].actor
-
 
                     # Evaluate the new log-probabilities and entropy under the current policy
                     action_distribution = actor(states)[1]
@@ -723,10 +715,18 @@ class PPO(RLAlgorithm):
                     logger.debug(f"policy_loss: {policy_loss}")
 
                     # Value loss (mean squared error between the predicted values and returns)
-                    normalized_returns = (returns - self.value_mean) / th.maximum(self.value_std, th.tensor(1e-6, device = self.device))
-                    value_loss = F.mse_loss(normalized_returns, normalized_values.squeeze())
+                    unclipped_value_loss = F.mse_loss(returns, values.squeeze())
 
-                    logger.debug(f"value loss: {value_loss}")
+                    logger.debug(f"value loss: {unclipped_value_loss}")
+                    values_clipped = old_values + th.clamp(
+                    values - old_values,
+                    -self.value_clip_ratio,
+                    self.value_clip_ratio
+                    )
+
+                    clipped_value_loss = F.mse_loss(returns, values_clipped.squeeze())
+
+                    value_loss = th.max(unclipped_value_loss, clipped_value_loss)
 
                     # Total loss: policy loss + value loss - entropy bonus
                     # euqation 9 from PPO paper multiplied with -1 to enable minimizing
@@ -773,6 +773,7 @@ class PPO(RLAlgorithm):
                                 training_metrics = {
                                     "training/policy_loss": policy_loss.item(),
                                     "training/value_loss": value_loss.item(),
+                                    "training/unclipped_value_loss": unclipped_value_loss.item(),
                                     "training/learning_rate": self.learning_rate,
                                     "training/entropy": entropy.mean().item(),
                                     "training/approx_kl": approx_kl_div,
