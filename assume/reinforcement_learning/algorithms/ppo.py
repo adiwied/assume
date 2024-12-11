@@ -325,6 +325,9 @@ class PPO(RLAlgorithm):
             actors_and_critics (dict): The actor and critic networks to be assigned.
 
         """
+        print("\n=== PPO initialize_policy ===")
+        print(f"Current actor_scheduler before init: {self.actor_scheduler}")
+        print(f"Current critic_scheduler before init: {self.critic_scheduler}")
         if actors_and_critics is None:
             self.create_actors()
             self.create_critics()
@@ -336,6 +339,22 @@ class PPO(RLAlgorithm):
                 unit_strategy.actor = actors_and_critics["actors"][u_id]
                 # unit_strategy.actor_target = actors_and_critics["actor_targets"][u_id]
 
+            if self.scheduler_type != "none":
+                print("Recreating schedulers for loaded networks")
+                self.actor_scheduler = create_lr_scheduler(
+                    optimizer=actors_and_critics["actors"]["pp_6"].optimizer,
+                    scheduler_type=self.scheduler_type,
+                    scheduler_kwargs=self.actor_lr_scheduler_kwargs
+                )
+                self.critic_scheduler = create_lr_scheduler(
+                    optimizer=actors_and_critics["critics"]["pp_6"].optimizer,
+                    scheduler_type=self.scheduler_type,
+                    scheduler_kwargs=self.critic_lr_scheduler_kwargs
+                )
+                if hasattr(self, "saved_scheduler_state"):
+                    self.actor_scheduler.load_state_dict(self.saved_actor_scheduler_state)
+                    self.critic_scheduler.load_state_dict(self.saved_critic_scheduler_state)
+                
             self.obs_dim = actors_and_critics["obs_dim"]
             self.act_dim = actors_and_critics["act_dim"]
             self.unique_obs_dim = actors_and_critics["unique_obs_dim"]
@@ -380,11 +399,22 @@ class PPO(RLAlgorithm):
             act_dim_list.append(unit_strategy.act_dim)
 
         if self.scheduler_type != "none":
-            self.actor_scheduler = create_lr_scheduler(
-                optimizer=actor_optimizers[0],
-                scheduler_type=self.scheduler_type,
-                scheduler_kwargs=self.actor_lr_scheduler_kwargs
-                )
+            print("Creating new actor scheduler")
+
+            if self.actor_scheduler is None:
+                self.actor_scheduler = create_lr_scheduler(
+                    optimizer=actor_optimizers[0],
+                    scheduler_type=self.scheduler_type,
+                    scheduler_kwargs=self.actor_lr_scheduler_kwargs
+                    )
+                print(f"New actor_scheduler: {self.actor_scheduler}")
+
+                if hasattr(self, "saved_scheduler_state"):
+                    self.actor_scheduler.load_state_dict(self.saved_actor_scheduler_state)
+                    print("loading saved scheduler state")
+
+        print(f"final actor_scheduler {self.actor_scheduler}")
+
 
         if len(set(obs_dim_list)) > 1:
             raise ValueError(
@@ -477,11 +507,18 @@ class PPO(RLAlgorithm):
             unique_obs_dim_list.append(strategy.unique_obs_dim)
         
         if self.scheduler_type != "none":
-            self.critic_scheduler = create_lr_scheduler(
-            optimizer=critic_optimizers[0],  
-            scheduler_type=self.scheduler_type,
-            scheduler_kwargs=self.critic_lr_scheduler_kwargs
-        )
+            if self.critic_scheduler is None:
+                self.critic_scheduler = create_lr_scheduler(
+                    optimizer=critic_optimizers[0],
+                    scheduler_type=self.scheduler_type,
+                    scheduler_kwargs=self.critic_lr_scheduler_kwargs
+                    )
+                print(f"New critic_scheduler: {self.critic_scheduler}")
+
+                if hasattr(self, "saved_scheduler_state"):
+                    self.critic_scheduler.load_state_dict(self.saved_critic_scheduler_state)
+                    print("loading saved scheduler state")
+
 
         # check if all unique_obs_dim are the same and raise an error if not
         # if they are all the same, set the unique_obs_dim attribute
@@ -700,21 +737,22 @@ class PPO(RLAlgorithm):
                 actor.optimizer.step()
                 critic.optimizer.step()
 
-            if self.actor_scheduler is not None:
-                self.actor_scheduler.step()
-                new_lr = self.actor_scheduler.get_last_lr()[0]
-                for u_id in self.learning_role.rl_strats.keys():
-                    for param_group in self.learning_role.rl_strats[u_id].actor.optimizer.param_groups:
-                        param_group["lr"] = new_lr
+        if self.actor_scheduler is not None:
+            self.actor_scheduler.step()
+            new_lr = self.actor_scheduler.get_last_lr()[0]
 
-            if self.critic_scheduler is not None:
-                self.critic_scheduler.step()
-                # Update all critic optimizers to match the scheduled learning rate
-                new_lr = self.critic_scheduler.get_last_lr()[0]
-                print(f"current lr: {new_lr}")
-                for u_id in self.learning_role.critics.keys():
-                    for param_group in self.learning_role.critics[u_id].optimizer.param_groups:
-                        param_group['lr'] = new_lr
+            for u_id in self.learning_role.rl_strats.keys():
+                for param_group in self.learning_role.rl_strats[u_id].actor.optimizer.param_groups:
+                    param_group["lr"] = new_lr
+
+        if self.critic_scheduler is not None:
+            self.critic_scheduler.step()
+            # Update all critic optimizers to match the scheduled learning rate
+            new_lr = self.critic_scheduler.get_last_lr()[0]
+            print(f"current critic lr: {new_lr}")
+            for u_id in self.learning_role.critics.keys():
+                for param_group in self.learning_role.critics[u_id].optimizer.param_groups:
+                    param_group['lr'] = new_lr
     
 def get_actions(rl_strategy, next_observation):
     """

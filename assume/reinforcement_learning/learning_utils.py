@@ -18,6 +18,7 @@ from torch.optim.lr_scheduler import (
     _LRScheduler,
     StepLR,
     ExponentialLR,
+    LinearLR
 )
 
 
@@ -210,9 +211,11 @@ def create_lr_scheduler(
             - "none"
             - "step"
             - "exp"
+            - "linear
         scheduler_kwargs: 
             - step: {"step_size": int, "gamma": float}
             - exp: {"gamma": float}
+            - linear: {"start_factor": float, "end_factor": float, "total_iters": int}
     """
     scheduler_kwargs = scheduler_kwargs or {}
     
@@ -224,6 +227,10 @@ def create_lr_scheduler(
         "exp": {
             "class": ExponentialLR,
             "required_kwargs": {"gamma"}
+        },
+        "linear": {
+            "class": LinearLR,
+            "required_kwargs": {"start_factor", "end_factor", "total_iters"}
         }
     }
 

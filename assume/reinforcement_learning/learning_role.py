@@ -148,6 +148,11 @@ class Learning(Role):
 
         """
         # TODO: Make this function of algorithm so that we loose case sensitivity here
+
+        if "scheduler_state" in inter_episodic_data and inter_episodic_data["scheduler_state"] is not None:
+            self.rl_algorithm.saved_actor_scheduler_state = inter_episodic_data["scheduler_state"]["actor_scheduler"]["state_dict"]
+            self.rl_algorithm.saved_critic_scheduler_state = inter_episodic_data["scheduler_state"]["critic_scheduler"]["state_dict"]
+
         self.episodes_done = inter_episodic_data["episodes_done"]
         self.eval_episodes_done = inter_episodic_data["eval_episodes_done"]
         self.max_eval = inter_episodic_data["max_eval"]
@@ -183,6 +188,7 @@ class Learning(Role):
             "buffer": self.buffer,
             "actors_and_critics": self.rl_algorithm.extract_policy(),
             "noise_scale": self.get_noise_scale(),
+            "scheduler_state": self.get_scheduler_state()
         }
 
     # TD3 and PPO
@@ -275,6 +281,23 @@ class Learning(Role):
         stored_scale = list(self.rl_strats.values())[0].action_noise.scale
 
         return stored_scale
+    
+    def get_scheduler_state(self):
+        scheduler_state = {}
+
+        if hasattr(self.rl_algorithm, "actor_scheduler") and self.rl_algorithm.actor_scheduler is not None:
+            scheduler_state["actor_scheduler"] = {
+                "state_dict": self.rl_algorithm.actor_scheduler.state_dict(),
+                "last_lr": self.rl_algorithm.actor_scheduler.get_last_lr()[0]
+            }
+        
+        if hasattr(self.rl_algorithm, "critic_scheduler") and self.rl_algorithm.critic_scheduler is not None:
+            scheduler_state["critic_scheduler"] = {
+                "state_dict": self.rl_algorithm.critic_scheduler.state_dict(),
+                "last_lr": self.rl_algorithm.critic_scheduler.get_last_lr()[0]
+            }
+
+        return scheduler_state if scheduler_state else None
 
     def create_learning_algorithm(self, algorithm: str):
         """
