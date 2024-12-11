@@ -719,7 +719,7 @@ class PPO(RLAlgorithm):
                     )
                     clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
 
-                    value_loss = th.max(clipped_value_loss, value_loss)
+                    value_loss = th.min(clipped_value_loss, value_loss)
                 logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
