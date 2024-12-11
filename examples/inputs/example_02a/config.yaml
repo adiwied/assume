@@ -150,7 +150,7 @@ tiny_ppo:
       market_mechanism: pay_as_clear
 
 
-base_ppo:
+base_ppo_linear:
   start_date: 2019-03-01 00:00
   end_date: 2019-03-31 00:00
   time_step: 1h
@@ -186,6 +186,18 @@ base_ppo:
       max_grad_norm: 0.3  # Gradient clipping value
       gae_lambda: 0.95  # GAE lambda for advantage estimation
       batch_size: 11  # Batch size for each update, if mini-batch approach is used (currently not implemented)
+
+      actor_learning_rate: 0.001 #allow for separate learning rates of actor and critic
+      critic_learning_rate: 0.001
+      scheduler_type: linear
+      actor_lr_scheduler_params:
+        start_factor: 1 # Number of epochs between learning rate decays
+        end_factor: 0.5   # 1 - decay in learning rate 
+        total_iters: 500
+      critic_lr_scheduler_params:
+        start_factor: 1 
+        end_factor: 0.5 
+        total_iters: 500 
 
   markets_config:
     EOM:
