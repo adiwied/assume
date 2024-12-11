@@ -149,3 +149,13 @@ examples/notebooks/outputs
 *.pb
 *.jar
 fameSetup.yaml
+*.pt
+wandb_key.txt
+# WandB specific entries
+wandb/
+*.wandb
+/wandb/
+.wandb/
+wandb-debug.log
+wandb-metadata.json
+run-*.wandb
