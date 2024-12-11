@@ -50,6 +50,7 @@ class PPO(RLAlgorithm):
         critic_lr_scheduler: str = "none",
         actor_lr_scheduler_kwargs: dict = None,
         critic_lr_scheduler_kwargs: dict = None,
+        value_clip_ratio: float = 0.05,
     ):
         super().__init__(
             learning_role=learning_role,
@@ -74,6 +75,8 @@ class PPO(RLAlgorithm):
 
         self.actor_scheduler = None #proceed with one scheduler for all agents 
         self.critic_scheduler = None
+
+        self.value_clip_ratio = value_clip_ratio
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -707,7 +710,16 @@ class PPO(RLAlgorithm):
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
-                value_loss = F.mse_loss(returns, values.squeeze())
+                value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
+                if self.value_clip_ratio is not None:
+                    #print("value loss is beeing clipped")
+                    values_clipped = full_values[batch_inds] + th.clamp(values - full_values[batch_inds],
+                    -self.value_clip_ratio,
+                    self.value_clip_ratio
+                    )
+                    clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
+
+                    value_loss = th.max(clipped_value_loss, value_loss)
                 logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
