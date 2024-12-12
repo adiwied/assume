@@ -106,7 +106,7 @@ class CriticPPO(nn.Module):
     def __init__(self, n_agents: int, obs_dim: int, act_dim: int, float_type, unique_obs_dim: int = 0):
         super().__init__()
 
-        self.obs_dim = obs_dim + unique_obs_dim * (n_agents - 1)
+        self.obs_dim = obs_dim #+ unique_obs_dim * (n_agents - 1)
         self.act_dim = act_dim * n_agents 
 
         if n_agents <= 50:

@@ -150,7 +150,7 @@ tiny_ppo:
       market_mechanism: pay_as_clear
 
 
-base_ppo_linear:
+base_ppo_linear_3:
   start_date: 2019-03-01 00:00
   end_date: 2019-03-31 00:00
   time_step: 1h

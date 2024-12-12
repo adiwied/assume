@@ -148,9 +148,11 @@ def collect_obs_for_central_critic(
     all_states = th.cat(
         (states[:, i, :].reshape(batch_size, -1), temp), axis=1
     ).view(batch_size, -1)
-
-
-    return all_states
+    
+    
+    states = states[:, i, :].reshape(batch_size, -1)
+    #print(f"states shape: {states.shape}")
+    return states
 
 # # For non-dynamic PPO buffer size calculation (remove if buffer stays dynamic)
 # def convert_to_timedelta(time_str):
