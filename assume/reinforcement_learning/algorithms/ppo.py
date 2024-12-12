@@ -50,7 +50,7 @@ class PPO(RLAlgorithm):
         critic_lr_scheduler: str = "none",
         actor_lr_scheduler_kwargs: dict = None,
         critic_lr_scheduler_kwargs: dict = None,
-        value_clip_ratio: float = 0.05,
+        value_clip_ratio: float = 0.3,
     ):
         super().__init__(
             learning_role=learning_role,
@@ -393,7 +393,7 @@ class PPO(RLAlgorithm):
             ).to(self.device)
 
             unit_strategy.actor.optimizer = Adam(
-                unit_strategy.actor.parameters(), lr=self.actor_learning_rate
+                unit_strategy.actor.parameters(), lr=self.actor_learning_rate, weight_decay=1e-4
             )
 
             actor_optimizers.append(unit_strategy.actor.optimizer)   
@@ -500,7 +500,7 @@ class PPO(RLAlgorithm):
             )
 
             self.learning_role.critics[u_id].optimizer = Adam(
-                self.learning_role.critics[u_id].parameters(), lr=self.critic_learning_rate
+                self.learning_role.critics[u_id].parameters(), lr=self.critic_learning_rate, weight_decay=1e-4
             )
 
             self.learning_role.critics[u_id] = self.learning_role.critics[u_id].to(
