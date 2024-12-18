@@ -118,11 +118,10 @@ def cli(args=None):
 
     argcomplete.autocomplete(parser)
     args = parser.parse_args(args)
-    name = args.scenario
     if args.db_uri:
         db_uri = make_url(args.db_uri)
     else:
-        db_uri = f"sqlite:///./examples/local_db/{name}.db"
+        db_uri = ""
 
     # add these two weird hacks for now
     warnings.filterwarnings("ignore", "coroutine.*?was never awaited.*")
@@ -157,6 +156,8 @@ def cli(args=None):
             study_case=args.case_study,
         )
 
+        logging.info(f"loaded {args.scenario} - {args.case_study}")
+
         if world.learning_config.get("learning_mode", False):
             run_learning(
                 world,
@@ -164,7 +165,6 @@ def cli(args=None):
                 scenario=args.scenario,
                 study_case=args.case_study,
             )
-
         world.run()
 
     except KeyboardInterrupt:

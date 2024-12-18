@@ -86,7 +86,7 @@ class RLUnitsOperator(UnitsOperator):
             content (ClearingMessage): The content of the clearing message.
             meta (MetaDict): The meta data of the market.
         """
-        logger.debug(f"{self.id} got market result: {content}")
+        logger.debug("%s got market result: %s", self.id, content)
         accepted_orders: Orderbook = content["accepted_orders"]
         rejected_orders: Orderbook = content["rejected_orders"]
         orderbook = accepted_orders + rejected_orders
@@ -140,17 +140,17 @@ class RLUnitsOperator(UnitsOperator):
                 else:
                     output_dict.update(
                         {
-                            "profit": unit.outputs["profit"].loc[start],
-                            "reward": unit.outputs["reward"].loc[start],
-                            "regret": unit.outputs["regret"].loc[start],
+                            "profit": unit.outputs["profit"].at[start],
+                            "reward": unit.outputs["reward"].at[start],
+                            "regret": unit.outputs["regret"].at[start],
                         }
                     )
 
                 # Only for MATD3, not for PPO
                 # Check if exploration_noise is not empty (MATD3)
-                action_tuple = unit.outputs["actions"].loc[start]
-                if "exploration_noise" in unit.outputs and hasattr(unit.outputs["exploration_noise"].loc[start], "numel"):
-                    noise_tuple = unit.outputs["exploration_noise"].loc[start]
+                action_tuple = unit.outputs["actions"].at[start]
+                if "exploration_noise" in unit.outputs and hasattr(unit.outputs["exploration_noise"].at[start], "numel"):
+                    noise_tuple = unit.outputs["exploration_noise"].at[start]
                 
                 action_dim = action_tuple.numel()
 
@@ -174,7 +174,7 @@ class RLUnitsOperator(UnitsOperator):
                 receiver_addr=db_addr,
                 content={
                     "context": "write_results",
-                    "type": "rl_learning_params",
+                    "type": "rl_params",
                     "data": output_agent_list,
                 },
             )
