@@ -87,7 +87,7 @@ class Learning(Role):
             "learning_rate_schedule", None
         )
         if self.learning_rate_schedule == "linear":
-            self.calc_lr_from_progress = linear_schedule_func(self.learning_rate, end=0.1*self.learning_rate, end_fraction=0.5)
+            self.calc_lr_from_progress = linear_schedule_func(self.learning_rate, end=0.05*self.learning_rate, end_fraction=0.5)
         else:
             self.calc_lr_from_progress = lambda x: self.learning_rate
 

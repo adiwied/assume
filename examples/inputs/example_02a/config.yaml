@@ -142,7 +142,7 @@ tiny_ppo:
       market_mechanism: pay_as_clear
 
 
-base_ppo_new_lr_inv12:
+base_ppo_norm7:
   start_date: 2019-03-01 00:00
   end_date: 2019-03-31 00:00
   time_step: 1h
@@ -153,7 +153,7 @@ base_ppo_new_lr_inv12:
     continue_learning: false
     device: cpu
     gradient_steps: 10
-    learning_rate: 0.0002
+    learning_rate: 0.0003
     learning_rate_schedule: linear
     validation_episodes_interval: 5 # after how many episodes the validation starts and the policy is updated
     training_episodes: 100

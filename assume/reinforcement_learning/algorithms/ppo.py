@@ -55,14 +55,19 @@ class PPO(RLAlgorithm):
         )
         self.gradient_steps = gradient_steps
         self.clip_ratio = clip_ratio
-        self.vf_coef = vf_coef
+        self.vf_coef = vf_coef #policy clip ratio
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
         self.gae_lambda = gae_lambda
         self.n_updates = 0  # Number of updates performed
         self.batch_size = learning_role.batch_size 
+        self.value_clip_ratio = value_clip_ratio #value function clip ratio
         
-        self.value_clip_ratio = value_clip_ratio
+        #statistics for value normalization
+        self.value_mean = 0
+        self.value_std = 1
+        self.value_normalizer_updated = False
+        
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -439,7 +444,8 @@ class PPO(RLAlgorithm):
     
     def get_values(self, states, actions):
         """
-        Gets values for a unit based on the observation using PPO.
+        Gets values for a unit based on the observation using PPO. 
+        Denormalizes critic outputs using running statistics. Induces critic to learn normalized value predictions
 
         Args:
             rl_strategy (RLStrategy): The strategy containing relevant information.
@@ -459,7 +465,7 @@ class PPO(RLAlgorithm):
             all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
 
             # Pass the current states through the critic network to get value estimates.
-            values[:,i] = self.learning_role.critics[u_id](all_states, all_actions).squeeze()
+            values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze())
                 
         return values
     
@@ -526,10 +532,13 @@ class PPO(RLAlgorithm):
         with th.no_grad():
             # Pass the current states through the critic network to get value estimates.
             full_values = self.get_values(full_transitions.observations, full_transitions.actions)
-
+            
             # Compute advantages using Generalized Advantage Estimation (GAE)
             full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
-        
+            
+            #update running statistics for value normalization
+            self.update_value_normalizer(full_returns)
+            
         for _ in range(self.gradient_steps):
             self.n_updates += 1
 
@@ -611,6 +620,25 @@ class PPO(RLAlgorithm):
                 actor.optimizer.step()
                 critic.optimizer.step()
 
+
+    def update_value_normalizer(self, targets):
+        """
+        Update running statistics for denormalization of critic outputs using an exponential moving average.
+        """
+        if not self.value_normalizer_updated:
+            self.value_mean = targets.mean().item()
+            self.value_std = targets.std().item()
+            self.value_normalizer_updated = True
+        else:
+            self.value_mean = 0.99 * self.value_mean + 0.01 * targets.mean().item()
+            self.value_std = 0.99 * self.value_std + 0.01 * targets.std().item()
+
+
+    def denormalize_values(self, normalized_values):
+        """
+        Denormalize critic outputs using the running mean and standard deviation of rewards
+        """
+        return self.value_mean + normalized_values * self.value_std
     
 def get_actions(rl_strategy, next_observation):
     """
