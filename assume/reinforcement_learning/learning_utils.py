@@ -124,7 +124,7 @@ def polyak_update(params, target_params, tau: float):
 
 
 def linear_schedule_func(
-    start: float, end: float = 0, end_fraction: float = 1
+    start: float, end: float = 0.1, end_fraction: float = 1
 ) -> Schedule:
     """
     Create a function that interpolates linearly between start and end

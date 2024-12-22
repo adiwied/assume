@@ -63,22 +63,8 @@ class Learning(Role):
         )
 
 
-
-        if self.rl_algorithm_name == "matd3":
-            self.learning_rate = learning_config["learning_rate"]
-
-        elif self.rl_algorithm_name == "ppo":
-            self.actor_learning_rate = learning_config.get("ppo", {}).get(
-                "actor_learning_rate", learning_config["learning_rate"]
-                )
-            self.critic_learning_rate = learning_config.get("ppo",{}).get(
-                "critic_learning_rate", learning_config["learning_rate"]
-                )
+        self.learning_rate = learning_config["learning_rate"]
         
-        self.scheduler_type = learning_config.get("ppo", {}).get("scheduler_type", "none")
-        self.actor_scheduler_params = learning_config.get("ppo", {}).get("actor_lr_scheduler_params", {})
-        self.critic_scheduler_params = learning_config.get("ppo", {}).get("critic_lr_scheduler_params", {})
-
         self.actor_architecture = learning_config.get(self.rl_algorithm_name, {}).get(
             "actor_architecture", "mlp"
         )
@@ -101,7 +87,7 @@ class Learning(Role):
             "learning_rate_schedule", None
         )
         if self.learning_rate_schedule == "linear":
-            self.calc_lr_from_progress = linear_schedule_func(self.learning_rate)
+            self.calc_lr_from_progress = linear_schedule_func(self.learning_rate, end=0.1*self.learning_rate, end_fraction=0.5)
         else:
             self.calc_lr_from_progress = lambda x: self.learning_rate
 
@@ -114,12 +100,15 @@ class Learning(Role):
         
         # if we do not have initial experience collected we will get an error as no samples are available on the
         # buffer from which we can draw experience to adapt the strategy, hence we set it to minimum one episode
-        self.episodes_collecting_initial_experience = max(
-            learning_config.get(self.rl_algorithm_name, {}).get(
-                "episodes_collecting_initial_experience", 5
-            ),
-            1,
-        )
+        if self.rl_algorithm_name == "matd3":
+            self.episodes_collecting_initial_experience = max(
+                learning_config.get(self.rl_algorithm_name, {}).get(
+                    "episodes_collecting_initial_experience", 5
+                ),
+                1,
+            )
+        elif self.rl_algorithm_name == "ppo":
+            self.episodes_collecting_initial_experience = 0
 
                 # if early_stopping_steps are not provided then set default to no early stopping (early_stopping_steps need to be greater than validation_episodes)
         self.early_stopping_steps = learning_config.get(
@@ -211,9 +200,6 @@ class Learning(Role):
         """
         # TODO: Make this function of algorithm so that we loose case sensitivity here
 
-        if "scheduler_state" in inter_episodic_data and inter_episodic_data["scheduler_state"] is not None:
-            self.rl_algorithm.saved_actor_scheduler_state = inter_episodic_data["scheduler_state"]["actor_scheduler"]["state_dict"]
-            self.rl_algorithm.saved_critic_scheduler_state = inter_episodic_data["scheduler_state"]["critic_scheduler"]["state_dict"]
 
         self.episodes_done = inter_episodic_data["episodes_done"]
         self.eval_episodes_done = inter_episodic_data["eval_episodes_done"]
@@ -248,7 +234,6 @@ class Learning(Role):
             "buffer": self.buffer,
             "actors_and_critics": self.rl_algorithm.extract_policy(),
             "noise_scale": self.get_noise_scale(),
-            "scheduler_state": self.get_scheduler_state()
         }
 
     # TD3 and PPO
@@ -326,8 +311,27 @@ class Learning(Role):
         Get the remaining learning progress from the simulation run.
 
         """
-        for _, unit in self.rl_strats.items():
-            unit.action_noise.scale = stored_scale
+        
+        total_duration = self.end - self.start
+        elapsed_duration = self.context.current_timestamp - self.start
+
+        learning_episodes = (
+            self.training_episodes - self.episodes_collecting_initial_experience
+        )
+
+        if self.episodes_done < self.episodes_collecting_initial_experience:
+            progress_remaining = 1
+        else:
+            progress_remaining = (
+                1
+                - (
+                    (self.episodes_done - self.episodes_collecting_initial_experience)
+                    / learning_episodes
+                )
+                - ((1 / learning_episodes) * (elapsed_duration / total_duration))
+            )
+
+        return progress_remaining
 
     def get_noise_scale(self) -> None:
         """
@@ -342,22 +346,6 @@ class Learning(Role):
 
         return stored_scale
     
-    def get_scheduler_state(self):
-        scheduler_state = {}
-
-        if hasattr(self.rl_algorithm, "actor_scheduler") and self.rl_algorithm.actor_scheduler is not None:
-            scheduler_state["actor_scheduler"] = {
-                "state_dict": self.rl_algorithm.actor_scheduler.state_dict(),
-                "last_lr": self.rl_algorithm.actor_scheduler.get_last_lr()[0]
-            }
-        
-        if hasattr(self.rl_algorithm, "critic_scheduler") and self.rl_algorithm.critic_scheduler is not None:
-            scheduler_state["critic_scheduler"] = {
-                "state_dict": self.rl_algorithm.critic_scheduler.state_dict(),
-                "last_lr": self.rl_algorithm.critic_scheduler.get_last_lr()[0]
-            }
-
-        return scheduler_state if scheduler_state else None
 
     def create_learning_algorithm(self, algorithm: str):
         """
@@ -382,8 +370,7 @@ class Learning(Role):
         elif algorithm == "ppo":
             self.rl_algorithm = PPO(
                 learning_role=self,
-                actor_learning_rate=self.actor_learning_rate,
-                critic_learning_rate=self.critic_learning_rate,
+                learning_rate = self.learning_rate,
                 gamma=self.gamma,  # Discount factor
                 gradient_steps=self.gradient_steps,  # Number of epochs for policy updates
                 clip_ratio=self.clip_ratio,  # PPO-specific clipping parameter
@@ -392,9 +379,6 @@ class Learning(Role):
                 max_grad_norm=self.max_grad_norm,  # Maximum gradient norm for clipping
                 gae_lambda=self.gae_lambda,  # Lambda for Generalized Advantage Estimation (GAE)
                 actor_architecture=self.actor_architecture,  # Actor network architecture
-                scheduler_type=self.scheduler_type,
-                actor_lr_scheduler_kwargs=self.actor_scheduler_params,
-                critic_lr_scheduler_kwargs=self.critic_scheduler_params,
             )
         else:
             logger.error(f"Learning algorithm {algorithm} not implemented!")

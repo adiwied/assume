@@ -142,7 +142,7 @@ tiny_ppo:
       market_mechanism: pay_as_clear
 
 
-base_ppo_linear:
+base_ppo_new_lr_inv12:
   start_date: 2019-03-01 00:00
   end_date: 2019-03-31 00:00
   time_step: 1h
@@ -153,15 +153,15 @@ base_ppo_linear:
     continue_learning: false
     device: cpu
     gradient_steps: 10
-    learning_rate: 0.0003
+    learning_rate: 0.0002
+    learning_rate_schedule: linear
     validation_episodes_interval: 5 # after how many episodes the validation starts and the policy is updated
     training_episodes: 100
-    validation_episodes_interval: 10
     max_bid_price: 100
     matd3:
       actor_architecture: mlp
       batch_size: 64
-      episodes_collecting_initial_experience: 3
+      episodes_collecting_initial_experience: 0
       gamma: 0.99
       noise_dt: 1
       noise_scale: 1
@@ -178,17 +178,7 @@ base_ppo_linear:
       gae_lambda: 0.95  # GAE lambda for advantage estimation
       batch_size: 11  # Batch size for each update, if mini-batch approach is used (currently not implemented)
 
-      actor_learning_rate: 0.0003 #allow for separate learning rates of actor and critic
-      critic_learning_rate: 0.0003
-      scheduler_type: linear
-      actor_lr_scheduler_params:
-        start_factor: 1 
-        end_factor: 0.1   #final learning rate = 0.1 * initial learning rate
-        total_iters: 500
-      critic_lr_scheduler_params:
-        start_factor: 1 
-        end_factor: 0.1
-        total_iters: 500 
+    
 
   markets_config:
     EOM:

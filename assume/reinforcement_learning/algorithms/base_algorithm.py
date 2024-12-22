@@ -33,8 +33,7 @@ class RLAlgorithm:
         self,
         # init learning_role as object of Learning class
         learning_role,
-        actor_learning_rate=1e-4, # adjust handling to ensure consistent use across algorithms
-        critic_learning_rate=1e-4,
+        learning_rate=1e-4, # adjust handling to ensure consistent use across algorithms
         batch_size=1024,
         gamma=0.99,
         actor_architecture="mlp",
@@ -43,9 +42,7 @@ class RLAlgorithm:
         super().__init__()
 
         self.learning_role = learning_role
-        #self.learning_rate = learning_rate --> adjust later to handle both matd and ppo
-        self.actor_learning_rate = actor_learning_rate
-        self.critic_learning_rate = critic_learning_rate
+        self.learning_rate = learning_rate # --> adjust later to handle both matd and ppo
         self.batch_size = batch_size
         self.gamma = gamma
 

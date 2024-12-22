@@ -13,7 +13,7 @@ from torch.optim import Adam
 from assume.common.base import LearningStrategy
 from assume.reinforcement_learning.algorithms.base_algorithm import RLAlgorithm
 from assume.reinforcement_learning.neural_network_architecture import CriticPPO
-from assume.reinforcement_learning.learning_utils import collect_obs_for_central_critic, create_lr_scheduler
+from assume.reinforcement_learning.learning_utils import collect_obs_for_central_critic
 
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,7 @@ class PPO(RLAlgorithm):
     def __init__(
         self,
         learning_role,
-        actor_learning_rate: float,
-        critic_learning_rate: float,
+        learning_rate: float,
         gamma: float,  # Discount factor for future rewards
         gradient_steps: int,  # Number of steps for updating the policy
         clip_ratio: float,  # Clipping parameter for policy updates
@@ -46,16 +45,11 @@ class PPO(RLAlgorithm):
         max_grad_norm: float,  # Gradient clipping value
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
-        scheduler_type: str = "none",
-        critic_lr_scheduler: str = "none",
-        actor_lr_scheduler_kwargs: dict = None,
-        critic_lr_scheduler_kwargs: dict = None,
         value_clip_ratio: float = 0.3,
     ):
         super().__init__(
             learning_role=learning_role,
-            actor_learning_rate=actor_learning_rate,
-            critic_learning_rate=critic_learning_rate,
+            learning_rate=learning_rate,
             gamma=gamma,
             actor_architecture=actor_architecture,
         )
@@ -67,15 +61,7 @@ class PPO(RLAlgorithm):
         self.gae_lambda = gae_lambda
         self.n_updates = 0  # Number of updates performed
         self.batch_size = learning_role.batch_size 
-
-        self.scheduler_type = scheduler_type
-        print(f"using {self.scheduler_type} scheduler")
-        self.actor_lr_scheduler_kwargs = actor_lr_scheduler_kwargs or {}
-        self.critic_lr_scheduler_kwargs = critic_lr_scheduler_kwargs or {}
-
-        self.actor_scheduler = None #proceed with one scheduler for all agents 
-        self.critic_scheduler = None
-
+        
         self.value_clip_ratio = value_clip_ratio
         
         # write error if different actor_architecture than dist is used
@@ -267,9 +253,6 @@ class PPO(RLAlgorithm):
             actors_and_critics (dict): The actor and critic networks to be assigned.
 
         """
-        print("\n=== PPO initialize_policy ===")
-        print(f"Current actor_scheduler before init: {self.actor_scheduler}")
-        print(f"Current critic_scheduler before init: {self.critic_scheduler}")
         if actors_and_critics is None:
             self.create_actors()
             self.create_critics()
@@ -280,22 +263,6 @@ class PPO(RLAlgorithm):
             for u_id, unit_strategy in self.learning_role.rl_strats.items():
                 unit_strategy.actor = actors_and_critics["actors"][u_id]
                 # unit_strategy.actor_target = actors_and_critics["actor_targets"][u_id]
-
-            if self.scheduler_type != "none":
-                print("Recreating schedulers for loaded networks")
-                self.actor_scheduler = create_lr_scheduler(
-                    optimizer=actors_and_critics["actors"]["pp_6"].optimizer,
-                    scheduler_type=self.scheduler_type,
-                    scheduler_kwargs=self.actor_lr_scheduler_kwargs
-                )
-                self.critic_scheduler = create_lr_scheduler(
-                    optimizer=actors_and_critics["critics"]["pp_6"].optimizer,
-                    scheduler_type=self.scheduler_type,
-                    scheduler_kwargs=self.critic_lr_scheduler_kwargs
-                )
-                if hasattr(self, "saved_scheduler_state"):
-                    self.actor_scheduler.load_state_dict(self.saved_actor_scheduler_state)
-                    self.critic_scheduler.load_state_dict(self.saved_critic_scheduler_state)
                 
             self.obs_dim = actors_and_critics["obs_dim"]
             self.act_dim = actors_and_critics["act_dim"]
@@ -332,30 +299,13 @@ class PPO(RLAlgorithm):
             ).to(self.device)
 
             unit_strategy.actor.optimizer = Adam(
-                unit_strategy.actor.parameters(), lr=self.actor_learning_rate, weight_decay=1e-4
+                unit_strategy.actor.parameters(), lr=self.learning_role.calc_lr_from_progress(1), weight_decay=1e-4
             )
 
             actor_optimizers.append(unit_strategy.actor.optimizer)   
 
             obs_dim_list.append(unit_strategy.obs_dim)
             act_dim_list.append(unit_strategy.act_dim)
-
-        if self.scheduler_type != "none":
-            print("Creating new actor scheduler")
-
-            if self.actor_scheduler is None:
-                self.actor_scheduler = create_lr_scheduler(
-                    optimizer=actor_optimizers[0],
-                    scheduler_type=self.scheduler_type,
-                    scheduler_kwargs=self.actor_lr_scheduler_kwargs
-                    )
-                print(f"New actor_scheduler: {self.actor_scheduler}")
-
-                if hasattr(self, "saved_scheduler_state"):
-                    self.actor_scheduler.load_state_dict(self.saved_actor_scheduler_state)
-                    print("loading saved scheduler state")
-
-        print(f"final actor_scheduler {self.actor_scheduler}")
 
 
         if len(set(obs_dim_list)) > 1:
@@ -439,7 +389,7 @@ class PPO(RLAlgorithm):
             )
 
             self.learning_role.critics[u_id].optimizer = Adam(
-                self.learning_role.critics[u_id].parameters(), lr=self.critic_learning_rate, weight_decay=1e-4
+                self.learning_role.critics[u_id].parameters(), lr=self.learning_role.calc_lr_from_progress(1), weight_decay=1e-4
             )
 
             self.learning_role.critics[u_id] = self.learning_role.critics[u_id].to(
@@ -448,18 +398,6 @@ class PPO(RLAlgorithm):
             critic_optimizers.append(self.learning_role.critics[u_id].optimizer)
             unique_obs_dim_list.append(strategy.unique_obs_dim)
         
-        if self.scheduler_type != "none":
-            if self.critic_scheduler is None:
-                self.critic_scheduler = create_lr_scheduler(
-                    optimizer=critic_optimizers[0],
-                    scheduler_type=self.scheduler_type,
-                    scheduler_kwargs=self.critic_lr_scheduler_kwargs
-                    )
-                print(f"New critic_scheduler: {self.critic_scheduler}")
-
-                if hasattr(self, "saved_scheduler_state"):
-                    self.critic_scheduler.load_state_dict(self.saved_critic_scheduler_state)
-                    print("loading saved scheduler state")
 
 
         # check if all unique_obs_dim are the same and raise an error if not
@@ -567,7 +505,20 @@ class PPO(RLAlgorithm):
         logger.debug("Updating Policy")
         # We will iterate for multiple epochs to update both the policy (actor) and value (critic) networks
         # The number of epochs controls how many times we update using the same collected data (from the buffer).
-
+        learning_rate = self.learning_role.calc_lr_from_progress(
+            self.learning_role.get_progress_remaining()
+        )
+ 
+        print(f"learning_rate: {learning_rate}")
+        for u_id, unit_strategy in self.learning_role.rl_strats.items():
+            self.update_learning_rate(
+                [
+                    self.learning_role.critics[u_id].optimizer,
+                    self.learning_role.rl_strats[u_id].actor.optimizer,
+                ],
+                learning_rate=learning_rate,
+            )
+        # TODO: maybe update entropy coefficient ?!   
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
         full_transitions = self.learning_role.buffer.get()
@@ -638,7 +589,7 @@ class PPO(RLAlgorithm):
                 total_loss = (
                     - policy_loss
                     + self.vf_coef * value_loss
-                    - self.entropy_coef * entropy.mean()
+                    #- entropy_coef * entropy.mean()
                 )  # Use self.vf_coef and self.entropy_coef
 
                 logger.debug(f"total loss: {total_loss}")
@@ -660,22 +611,6 @@ class PPO(RLAlgorithm):
                 actor.optimizer.step()
                 critic.optimizer.step()
 
-        if self.actor_scheduler is not None:
-            self.actor_scheduler.step()
-            new_lr = self.actor_scheduler.get_last_lr()[0]
-
-            for u_id in self.learning_role.rl_strats.keys():
-                for param_group in self.learning_role.rl_strats[u_id].actor.optimizer.param_groups:
-                    param_group["lr"] = new_lr
-
-        if self.critic_scheduler is not None:
-            self.critic_scheduler.step()
-            # Update all critic optimizers to match the scheduled learning rate
-            new_lr = self.critic_scheduler.get_last_lr()[0]
-            print(f"current critic lr: {new_lr}")
-            for u_id in self.learning_role.critics.keys():
-                for param_group in self.learning_role.critics[u_id].optimizer.param_groups:
-                    param_group['lr'] = new_lr
     
 def get_actions(rl_strategy, next_observation):
     """
