@@ -62,11 +62,7 @@ class PPO(RLAlgorithm):
         self.n_updates = 0  # Number of updates performed
         self.batch_size = learning_role.batch_size 
         self.value_clip_ratio = value_clip_ratio #value function clip ratio
-        
-        #statistics for value normalization
-        self.value_mean = 0
-        self.value_std = 1
-        self.value_normalizer_updated = False
+        self.value_stats = {} # stats dictionary for value normalization
         
         
         # write error if different actor_architecture than dist is used
@@ -273,6 +269,15 @@ class PPO(RLAlgorithm):
             self.act_dim = actors_and_critics["act_dim"]
             self.unique_obs_dim = actors_and_critics["unique_obs_dim"]
 
+        # fill value dictionary per agent with starting values
+        
+        for u_id in self.learning_role.rl_strats.keys():
+            self.value_stats[u_id] = {
+                'mean': 0.0,
+                'std': 1.0,
+                'updated': False
+            }
+
     # Removed actor_target in comparison to MATD3
     def create_actors(self) -> None:
         """
@@ -438,6 +443,7 @@ class PPO(RLAlgorithm):
             "obs_dim": self.obs_dim,
             "act_dim": self.act_dim,
             "unique_obs_dim": self.unique_obs_dim,
+            "value_stats": self.value_stats
         }
 
         return actors_and_critics
@@ -465,7 +471,7 @@ class PPO(RLAlgorithm):
             all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
 
             # Pass the current states through the critic network to get value estimates.
-            values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze())
+            values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze(), u_id)
                 
         return values
     
@@ -538,7 +544,7 @@ class PPO(RLAlgorithm):
             
             #update running statistics for value normalization
             self.update_value_normalizer(full_returns)
-            
+
         for _ in range(self.gradient_steps):
             self.n_updates += 1
 
@@ -620,25 +626,34 @@ class PPO(RLAlgorithm):
                 actor.optimizer.step()
                 critic.optimizer.step()
 
-
+    
     def update_value_normalizer(self, targets):
         """
-        Update running statistics for denormalization of critic outputs using an exponential moving average.
+        Update running statistics for value normalization per agent using an exponential moving average.
+        Args:
+            targets: Tensor of shape (buffer_size, n_agents) containing returns
         """
-        if not self.value_normalizer_updated:
-            self.value_mean = targets.mean().item()
-            self.value_std = targets.std().item()
-            self.value_normalizer_updated = True
-        else:
-            self.value_mean = 0.99 * self.value_mean + 0.01 * targets.mean().item()
-            self.value_std = 0.99 * self.value_std + 0.01 * targets.std().item()
+        for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
+            if not self.value_stats[u_id]['updated']:
+                self.value_stats[u_id]['mean'] = targets[:, i].mean().item()
+                self.value_stats[u_id]['std'] = targets[:, i].std().item()
+                self.value_stats[u_id]['updated'] = True
+            else:
+                # Exponential moving average update for each agent
+                self.value_stats[u_id]['mean'] = 0.99 * self.value_stats[u_id]['mean'] + 0.01 * targets[:, i].mean().item()
+                self.value_stats[u_id]['std'] = 0.99 * self.value_stats[u_id]['std'] + 0.01 * targets[:, i].std().item()
 
 
-    def denormalize_values(self, normalized_values):
+    def denormalize_values(self, normalized_values, u_id):
         """
-        Denormalize critic outputs using the running mean and standard deviation of rewards
+        Denormalize critic outputs using the running mean and standard deviation of returns for a specific agent
+        Args:
+            normalized_values: Tensor of normalized values from critic
+            u_id: Agent identifier for accessing correct statistics
+        Returns:
+            Tensor of denormalized values
         """
-        return self.value_mean + normalized_values * self.value_std
+        return self.value_stats[u_id]['mean'] + normalized_values * self.value_stats[u_id]['std']
     
 def get_actions(rl_strategy, next_observation):
     """
