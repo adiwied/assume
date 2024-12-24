@@ -63,7 +63,7 @@ class PPO(RLAlgorithm):
         self.batch_size = learning_role.batch_size 
         self.value_clip_ratio = value_clip_ratio #value function clip ratio
         self.value_stats = {} # stats dictionary for value normalization
-        
+        self.keep_value_stats = False
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -269,14 +269,21 @@ class PPO(RLAlgorithm):
             self.act_dim = actors_and_critics["act_dim"]
             self.unique_obs_dim = actors_and_critics["unique_obs_dim"]
 
-        # fill value dictionary per agent with starting values
-        
+            #carry over value_stats from previous episode
+            #
+            if self.keep_value_stats:
+                self.value_stats = actors_and_critics.get("value_stats", {})
+
+        # fill value_stats in first episode or for new agents
         for u_id in self.learning_role.rl_strats.keys():
-            self.value_stats[u_id] = {
-                'mean': 0.0,
-                'std': 1.0,
-                'updated': False
-            }
+            if u_id not in self.value_stats:
+                self.value_stats[u_id] = {
+                    'mean': 0.0,
+                    'std': 1.0,
+                    'updated': False
+                }
+        
+        print(self.value_stats)
 
     # Removed actor_target in comparison to MATD3
     def create_actors(self) -> None:
@@ -445,7 +452,7 @@ class PPO(RLAlgorithm):
             "unique_obs_dim": self.unique_obs_dim,
             "value_stats": self.value_stats
         }
-
+        print(self.value_stats)
         return actors_and_critics
     
     def get_values(self, states, actions):
@@ -604,7 +611,7 @@ class PPO(RLAlgorithm):
                 total_loss = (
                     - policy_loss
                     + self.vf_coef * value_loss
-                    #- entropy_coef * entropy.mean()
+                    #- self.entropy_coef * entropy.mean()
                 )  # Use self.vf_coef and self.entropy_coef
 
                 logger.debug(f"total loss: {total_loss}")
