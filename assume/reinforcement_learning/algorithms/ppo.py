@@ -46,6 +46,7 @@ class PPO(RLAlgorithm):
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
         value_clip_ratio: float = 0.3,
+        share_critic = True
     ):
         super().__init__(
             learning_role=learning_role,
@@ -64,6 +65,7 @@ class PPO(RLAlgorithm):
         self.value_clip_ratio = value_clip_ratio #value function clip ratio
         self.value_stats = {} # stats dictionary for value normalization
         self.keep_value_stats = False
+        self.share_critic = share_critic
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -118,16 +120,24 @@ class PPO(RLAlgorithm):
             directory (str): The base directory for saving the parameters.
         """
         os.makedirs(directory, exist_ok=True)
-        for u_id in self.learning_role.rl_strats.keys():
+        if self.share_critic:
             obj = {
-                "critic": self.learning_role.critics[u_id].state_dict(),
-                # "critic_target": self.learning_role.target_critics[u_id].state_dict(),
-                "critic_optimizer": self.learning_role.critics[
-                    u_id
-                ].optimizer.state_dict(),
+            "critic": self.shared_critic.state_dict(),
+            "critic_optimizer": self.shared_critic.optimizer.state_dict(),
             }
-            path = f"{directory}/critic_{u_id}.pt"
+            path = f"{directory}/shared_critic.pt"
             th.save(obj, path)
+        else:
+            for u_id in self.learning_role.rl_strats.keys():
+                obj = {
+                    "critic": self.learning_role.critics[u_id].state_dict(),
+                    # "critic_target": self.learning_role.target_critics[u_id].state_dict(),
+                    "critic_optimizer": self.learning_role.critics[
+                        u_id
+                    ].optimizer.state_dict(),
+                }
+                path = f"{directory}/critic_{u_id}.pt"
+                th.save(obj, path)
 
     # Removed actor_target in comparison to MATD3
     def save_actor_params(self, directory):
@@ -190,20 +200,27 @@ class PPO(RLAlgorithm):
                 "Specified directory for loading the critics does not exist! Starting with randomly initialized values!"
             )
             return
-
-        for u_id in self.learning_role.rl_strats.keys():
+        if self.share_critic:
             try:
-                critic_params = self.load_obj(
-                    directory=f"{directory}/critics/critic_{str(u_id)}.pt"
-                )
-                self.learning_role.critics[u_id].load_state_dict(
-                    critic_params["critic"]
-                )
-                self.learning_role.critics[u_id].optimizer.load_state_dict(
-                    critic_params["critic_optimizer"]
-                )
+                critic_params = self.load_obj(f"{directory}/critics/shared_critic.pt")
+                self.shared_critic.load_state_dict(critic_params["critic"])
+                self.shared_critic.optimizer.load_state_dict(critic_params["critic_optimizer"])
             except Exception:
-                logger.warning(f"No critic values loaded for agent {u_id}")
+                logger.warning("No critic values loaded")
+        else:
+            for u_id in self.learning_role.rl_strats.keys():
+                try:
+                    critic_params = self.load_obj(
+                        directory=f"{directory}/critics/critic_{str(u_id)}.pt"
+                    )
+                    self.learning_role.critics[u_id].load_state_dict(
+                        critic_params["critic"]
+                    )
+                    self.learning_role.critics[u_id].optimizer.load_state_dict(
+                        critic_params["critic_optimizer"]
+                    )
+                except Exception:
+                    logger.warning(f"No critic values loaded for agent {u_id}")
 
     # Removed actor_target in comparison to MATD3
     def load_actor_params(self, directory: str) -> None:
@@ -256,10 +273,18 @@ class PPO(RLAlgorithm):
         """
         if actors_and_critics is None:
             self.create_actors()
-            self.create_critics()
+            if self.share_critic:
+                    self.create_shared_critic()
+                    print("created shared critic")
+            else:
+                self.create_critics()
 
         else:
-            self.learning_role.critics = actors_and_critics["critics"]
+            if self.share_critic:
+                self.shared_critic = actors_and_critics["shared_critic"]
+            else: 
+                self.learning_role.critics = actors_and_critics["critics"]
+
             # self.learning_role.target_critics = actors_and_critics["target_critics"]
             for u_id, unit_strategy in self.learning_role.rl_strats.items():
                 unit_strategy.actor = actors_and_critics["actors"][u_id]
@@ -378,6 +403,34 @@ class PPO(RLAlgorithm):
     #         self.unique_obs_dim = unique_obs_dim_list[0]
 
 
+    def create_shared_critic(self) -> None:
+        """
+        Create a centralized critic network that will be used by all agents.
+        I want to try how this works out, might delete later
+        """
+        # TODO: test and delete later
+        n_agents = len(self.learning_role.rl_strats)
+        strategy = next(iter(self.learning_role.rl_strats.values())) # get first strategy for obs/act_dim
+
+        # create one shared critic for all agents
+        self.shared_critic = CriticPPO(
+            n_agents=n_agents,
+            obs_dim=strategy.obs_dim,
+            act_dim=strategy.act_dim,
+            unique_obs_dim=strategy.unique_obs_dim,
+            float_type=self.float_type
+        ).to(self.device)
+
+        self.shared_critic.optimizer = Adam(
+            self.shared_critic.parameters(),
+            lr=self.learning_role.calc_lr_from_progress(1),
+            weight_decay=1e-4
+)
+
+        # create single optimizer for shared critic
+
+        self.unique_obs_dim = strategy.unique_obs_dim
+
 
     # Centralized
     def create_critics(self) -> None:
@@ -446,14 +499,21 @@ class PPO(RLAlgorithm):
 
         actors_and_critics = {
             "actors": actors,
-            "critics": self.learning_role.critics,
+            
             "obs_dim": self.obs_dim,
             "act_dim": self.act_dim,
             "unique_obs_dim": self.unique_obs_dim,
             "value_stats": self.value_stats
         }
+        if self.share_critic:
+            actors_and_critics["shared_critic"] = self.shared_critic
+            print("extracting shared critics")
+        else:
+            actors_and_critics["critics"] = self.learning_role.critics
+            print("extracting individual critics")
         print(self.value_stats)
         return actors_and_critics
+    
     
     def get_values(self, states, actions):
         """
@@ -477,8 +537,11 @@ class PPO(RLAlgorithm):
         for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
             all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
 
+            if self.share_critic:
+                values[:,i] = self.denormalize_values(self.shared_critic(all_states, all_actions).squeeze(), u_id)
             # Pass the current states through the critic network to get value estimates.
-            values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze(), u_id)
+            else:
+                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze(), u_id)
                 
         return values
     
@@ -529,14 +592,23 @@ class PPO(RLAlgorithm):
         )
  
         print(f"learning_rate: {learning_rate}")
-        for u_id, unit_strategy in self.learning_role.rl_strats.items():
-            self.update_learning_rate(
-                [
-                    self.learning_role.critics[u_id].optimizer,
-                    self.learning_role.rl_strats[u_id].actor.optimizer,
-                ],
-                learning_rate=learning_rate,
-            )
+        if not self.share_critic:
+            for u_id, unit_strategy in self.learning_role.rl_strats.items():
+                self.update_learning_rate(
+                    [
+                        self.learning_role.critics[u_id].optimizer,
+                        self.learning_role.rl_strats[u_id].actor.optimizer,
+                    ],
+                    learning_rate=learning_rate,
+                )
+        else: 
+            self.update_learning_rate([self.shared_critic.optimizer], learning_rate)
+            for u_id, unit_strategy in self.learning_role.rl_strats.items():
+                self.update_learning_rate(
+                    [self.learning_role.rl_strats[u_id].actor.optimizer],
+                    learning_rate=learning_rate,
+                )
+            
         # TODO: maybe update entropy coefficient ?!   
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
@@ -552,9 +624,12 @@ class PPO(RLAlgorithm):
             #update running statistics for value normalization
             self.update_value_normalizer(full_returns)
 
+            value_loss = None
+
         for _ in range(self.gradient_steps):
             self.n_updates += 1
-
+            if self.share_critic:
+                self.shared_critic.optimizer.zero_grad()
             # always use updated values --> check later if best
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
@@ -569,7 +644,10 @@ class PPO(RLAlgorithm):
                 values = self.get_values(states, actions)
 
                 # Centralized
-                critic = self.learning_role.critics[u_id]
+                if not self.share_critic:
+                    critic = self.learning_role.critics[u_id]
+                else: critic = self.shared_critic
+                
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
 
@@ -594,7 +672,9 @@ class PPO(RLAlgorithm):
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
-                value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
+                if (not self.share_critic) or (self.share_critic == True and u_id == "pp_6"):
+                    value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
+                    print(f"value loss calculated for {u_id}")
                 if self.value_clip_ratio is not None:
                     #print("value loss is beeing clipped")
                     values_clipped = full_values[batch_inds] + th.clamp(values - full_values[batch_inds],
@@ -618,7 +698,9 @@ class PPO(RLAlgorithm):
 
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
-                critic.optimizer.zero_grad()
+                
+                if not self.share_critic:
+                    critic.optimizer.zero_grad()
                 total_loss.backward(retain_graph=True)
 
                 # Clip gradients to prevent gradient explosion
@@ -631,7 +713,10 @@ class PPO(RLAlgorithm):
 
                 # Perform optimization steps
                 actor.optimizer.step()
-                critic.optimizer.step()
+                if not self.share_critic:
+                    critic.optimizer.step()
+            if self.share_critic:
+                self.shared_critic.optimizer.step()
 
     
     def update_value_normalizer(self, targets):
