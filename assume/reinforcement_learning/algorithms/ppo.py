@@ -45,8 +45,8 @@ class PPO(RLAlgorithm):
         max_grad_norm: float,  # Gradient clipping value
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
-        value_clip_ratio: float = 0.3,
-        share_critic = True
+        value_clip_ratio: float = 0.2,
+        share_critic = False
     ):
         super().__init__(
             learning_role=learning_role,
@@ -64,7 +64,7 @@ class PPO(RLAlgorithm):
         self.batch_size = learning_role.batch_size 
         self.value_clip_ratio = value_clip_ratio #value function clip ratio
         self.value_stats = {} # stats dictionary for value normalization
-        self.keep_value_stats = False
+        self.keep_value_stats = True
         self.share_critic = share_critic
         
         # write error if different actor_architecture than dist is used
@@ -538,7 +538,7 @@ class PPO(RLAlgorithm):
             all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
 
             if self.share_critic:
-                values[:,i] = self.denormalize_values(self.shared_critic(all_states, all_actions).squeeze(), u_id)
+                values[:,i] = self.shared_critic(all_states, all_actions).squeeze()
             # Pass the current states through the critic network to get value estimates.
             else:
                 values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions).squeeze(), u_id)
@@ -622,14 +622,14 @@ class PPO(RLAlgorithm):
             full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
             
             #update running statistics for value normalization
-            self.update_value_normalizer(full_returns)
+            if not self.share_critic:
+                self.update_value_normalizer(full_returns)
 
             value_loss = None
 
-        for _ in range(self.gradient_steps):
+        for counter in range(self.gradient_steps):
             self.n_updates += 1
-            if self.share_critic:
-                self.shared_critic.optimizer.zero_grad()
+            
             # always use updated values --> check later if best
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
@@ -668,32 +668,44 @@ class PPO(RLAlgorithm):
                 logger.debug(f"surrogate2: {surrogate2}")
 
                 # Final policy loss (clipped surrogate loss) equation 7 from PPO paper
-                policy_loss = th.min(surrogate1, surrogate2).mean()
+                policy_loss = -th.min(surrogate1, surrogate2).mean()
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
                 if (not self.share_critic) or (self.share_critic == True and u_id == "pp_6"):
                     value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
-                    print(f"value loss calculated for {u_id}")
-                if self.value_clip_ratio is not None:
-                    #print("value loss is beeing clipped")
-                    values_clipped = full_values[batch_inds] + th.clamp(values - full_values[batch_inds],
-                    -self.value_clip_ratio,
-                    self.value_clip_ratio
-                    )
-                    clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
+                    #print(f"value loss calculated for {u_id}")
 
-                    value_loss = th.min(clipped_value_loss, value_loss)
-                logger.debug(f"value loss: {value_loss}")
+                    if self.value_clip_ratio is not None:
+                        #print("value loss is beeing clipped")
+                        values_clipped = full_values[batch_inds] + th.clamp(values - full_values[batch_inds],
+                        -self.value_clip_ratio,
+                        self.value_clip_ratio
+                        )
+                        clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
+
+                        value_loss = th.max(clipped_value_loss, value_loss)
+                    
+                    if self.share_critic:
+                        self.shared_critic.optimizer.zero_grad()
+                        value_loss.backward()
+                        th.nn.utils.clip_grad_norm_(
+                            self.shared_critic.parameters(), self.max_grad_norm
+                        )
+                        self.shared_critic.optimizer.step()
+                        #if counter == 1:
+                            #print("using pure critic loss")
+
+                    logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
                 # euqation 9 from PPO paper multiplied with -1 to enable minimizing
                 total_loss = (
-                    - policy_loss
+                     policy_loss # added minus in policy loss calculation already
                     + self.vf_coef * value_loss
                     #- self.entropy_coef * entropy.mean()
                 )  # Use self.vf_coef and self.entropy_coef
-
+                actor_loss = policy_loss - self.entropy_coef * entropy.mean()
                 logger.debug(f"total loss: {total_loss}")
 
                 # Zero the gradients and perform backpropagation for both actor and critic
@@ -701,23 +713,25 @@ class PPO(RLAlgorithm):
                 
                 if not self.share_critic:
                     critic.optimizer.zero_grad()
-                total_loss.backward(retain_graph=True)
+                    total_loss.backward()
+                    
+                else: 
+                    actor_loss.backward()
 
                 # Clip gradients to prevent gradient explosion
                 th.nn.utils.clip_grad_norm_(
                     actor.parameters(), self.max_grad_norm
                 )  # Use self.max_grad_norm
-                th.nn.utils.clip_grad_norm_(
-                    critic.parameters(), self.max_grad_norm
-                )  # Use self.max_grad_norm
+                 # Use self.max_grad_norm
 
                 # Perform optimization steps
                 actor.optimizer.step()
                 if not self.share_critic:
+                    th.nn.utils.clip_grad_norm_(
+                        critic.parameters(), self.max_grad_norm
+                    )
                     critic.optimizer.step()
-            if self.share_critic:
-                self.shared_critic.optimizer.step()
-
+            
     
     def update_value_normalizer(self, targets):
         """
