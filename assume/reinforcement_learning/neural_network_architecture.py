@@ -182,7 +182,7 @@ class DistActor(MLPActor):
     def __init__(self, obs_dim: int, act_dim: int, float_type, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
         
-        self.initialize_weights(final_gain=0.3)
+        self.initialize_weights(final_gain=0.01)
         
     def initialize_weights(self, final_gain=np.sqrt(2)):
         for layer in [self.FC1, self.FC2]:

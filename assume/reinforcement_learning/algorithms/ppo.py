@@ -703,7 +703,7 @@ class PPO(RLAlgorithm):
                 total_loss = (
                      policy_loss # added minus in policy loss calculation already
                     + self.vf_coef * value_loss
-                    #- self.entropy_coef * entropy.mean()
+                    - self.entropy_coef * entropy.mean()
                 )  # Use self.vf_coef and self.entropy_coef
                 actor_loss = policy_loss - self.entropy_coef * entropy.mean()
                 logger.debug(f"total loss: {total_loss}")
