@@ -612,20 +612,26 @@ class PPO(RLAlgorithm):
         # TODO: maybe update entropy coefficient ?!   
         # Retrieve experiences from the buffer
         # The collected experiences (observations, actions, rewards, log_probs) are stored in the buffer.
-        full_transitions = self.learning_role.buffer.get()
+        transitions = self.learning_role.buffer.get()
         
         with th.no_grad():
             # Pass the current states through the critic network to get value estimates.
-            full_values = self.get_values(full_transitions.observations, full_transitions.actions)
+            full_values = self.get_values(transitions.observations, transitions.actions)
             
             # Compute advantages using Generalized Advantage Estimation (GAE)
-            full_advantages, full_returns = self.get_advantages(full_transitions.rewards, full_values)
+            full_advantages, full_returns = self.get_advantages(transitions.rewards, full_values)
             
             #update running statistics for value normalization
             if not self.share_critic:
                 self.update_value_normalizer(full_returns)
 
             value_loss = None
+        
+        states = transitions.observations
+        actions = transitions.actions
+        log_probs = transitions.log_probs
+        advantages = full_advantages
+        returns = full_returns
 
         for counter in range(self.gradient_steps):
             self.n_updates += 1
@@ -635,12 +641,6 @@ class PPO(RLAlgorithm):
             # Each agent has its own actor. Critic (value network) is centralized.
             for u_id in self.learning_role.rl_strats.keys():
                 
-                transitions, batch_inds = self.learning_role.buffer.sample(self.batch_size)
-                states = transitions.observations
-                actions = transitions.actions
-                log_probs = transitions.log_probs
-                advantages = full_advantages[batch_inds]
-                returns = full_returns[batch_inds]
                 values = self.get_values(states, actions)
 
                 # Centralized
@@ -678,7 +678,7 @@ class PPO(RLAlgorithm):
 
                     if self.value_clip_ratio is not None:
                         #print("value loss is beeing clipped")
-                        values_clipped = full_values[batch_inds] + th.clamp(values - full_values[batch_inds],
+                        values_clipped = full_values + th.clamp(values - full_values,
                         -self.value_clip_ratio,
                         self.value_clip_ratio
                         )
@@ -703,7 +703,7 @@ class PPO(RLAlgorithm):
                 total_loss = (
                      policy_loss # added minus in policy loss calculation already
                     + self.vf_coef * value_loss
-                    - self.entropy_coef * entropy.mean()
+                    #- self.entropy_coef * entropy.mean()
                 )  # Use self.vf_coef and self.entropy_coef
                 actor_loss = policy_loss - self.entropy_coef * entropy.mean()
                 logger.debug(f"total loss: {total_loss}")
