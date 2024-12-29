@@ -47,7 +47,7 @@ base:
       market_mechanism: pay_as_clear
 
 
-base_ppo_ic_fix_vf1_keepvs:
+base_ppo_sep_loss_statei:
   start_date: 2019-03-01 00:00
   end_date: 2019-04-01 00:00
   time_step: 1h
@@ -82,8 +82,8 @@ base_ppo_ic_fix_vf1_keepvs:
       vf_coef: 0.75  # Value function coefficient in the loss function
       entropy_coef: 0.005  # Entropy coefficient for exploration
       max_grad_norm: 0.3  # Gradient clipping value
-      gae_lambda: 0.9  # GAE lambda for advantage estimation
-      batch_size: 16  # Batch size for each update, if mini-batch approach is used (currently not implemented)
+      gae_lambda: 0.95  # GAE lambda for advantage estimation
+      batch_size: 33  # Batch size for each update, if mini-batch approach is used (currently not implemented)
       
 
 

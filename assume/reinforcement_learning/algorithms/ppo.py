@@ -591,7 +591,7 @@ class PPO(RLAlgorithm):
             self.learning_role.get_progress_remaining()
         )
  
-        print(f"learning_rate: {learning_rate}")
+        #print(f"learning_rate: {learning_rate}")
         if not self.share_critic:
             for u_id, unit_strategy in self.learning_role.rl_strats.items():
                 self.update_learning_rate(
@@ -639,7 +639,7 @@ class PPO(RLAlgorithm):
             # always use updated values --> check later if best
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
-            for u_id in self.learning_role.rl_strats.keys():
+            for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
                 
                 values = self.get_values(states, actions)
 
@@ -650,20 +650,26 @@ class PPO(RLAlgorithm):
                 
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
-
+                # print("\nIn update_policy:")
+                # print(f"states shape before actor: {states.shape}")
                 # Evaluate the new log-probabilities and entropy under the current policy
-                action_distribution = actor(states)[1]
-                new_log_probs = action_distribution.log_prob(actions).sum(-1)
+                state_i = states[:, i, :]      # Shape: [32, 50]  (batch, obs_dim)
+                actions_i = actions[:, i, :]   # Shape: [32, 2]   (batch, action_dim)
+                log_probs_i = log_probs[:, i]  # Shape: [32]      (batch)
+                advantages_i = advantages[:, i] # Shape: [32]      (batch)
+                returns_i = returns[:, i] 
+                action_distribution = actor(state_i)[1]
+                new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
                 
                 entropy = action_distribution.entropy().sum(-1)
 
                 # Compute the ratio of new policy to old policy
-                ratio = (new_log_probs - log_probs).exp()
+                ratio = (new_log_probs - log_probs_i).exp()
                 logger.debug(f"Ratio: {ratio}")
 
                 # Surrogate loss calculation
-                surrogate1 = ratio * advantages
-                surrogate2 = (th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * advantages)  # Use self.clip_ratio
+                surrogate1 = ratio * advantages_i
+                surrogate2 = (th.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * advantages_i)  # Use self.clip_ratio
                 logger.debug(f"surrogate1: {surrogate1}")
                 logger.debug(f"surrogate2: {surrogate2}")
 
@@ -686,37 +692,32 @@ class PPO(RLAlgorithm):
 
                         value_loss = th.max(clipped_value_loss, value_loss)
                     
-                    if self.share_critic:
-                        self.shared_critic.optimizer.zero_grad()
-                        value_loss.backward()
-                        th.nn.utils.clip_grad_norm_(
-                            self.shared_critic.parameters(), self.max_grad_norm
-                        )
-                        self.shared_critic.optimizer.step()
-                        #if counter == 1:
-                            #print("using pure critic loss")
+                    
+                    critic.optimizer.zero_grad()
+                
+                    value_loss.backward()
+                    th.nn.utils.clip_grad_norm_(
+                        critic.parameters(), self.max_grad_norm
+                    )
+                    critic.optimizer.step()
+                    #if counter == 1:
+                        #print("using pure critic loss")
 
                     logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
                 # euqation 9 from PPO paper multiplied with -1 to enable minimizing
-                total_loss = (
-                     policy_loss # added minus in policy loss calculation already
-                    + self.vf_coef * value_loss
-                    #- self.entropy_coef * entropy.mean()
-                )  # Use self.vf_coef and self.entropy_coef
+                # total_loss = (
+                #      policy_loss # added minus in policy loss calculation already
+                #     + self.vf_coef * value_loss
+                #     #- self.entropy_coef * entropy.mean()
+                # )  # Use self.vf_coef and self.entropy_coef
                 actor_loss = policy_loss - self.entropy_coef * entropy.mean()
-                logger.debug(f"total loss: {total_loss}")
+                #logger.debug(f"total loss: {total_loss}")
 
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
-                
-                if not self.share_critic:
-                    critic.optimizer.zero_grad()
-                    total_loss.backward()
-                    
-                else: 
-                    actor_loss.backward()
+                actor_loss.backward()
 
                 # Clip gradients to prevent gradient explosion
                 th.nn.utils.clip_grad_norm_(
@@ -726,11 +727,7 @@ class PPO(RLAlgorithm):
 
                 # Perform optimization steps
                 actor.optimizer.step()
-                if not self.share_critic:
-                    th.nn.utils.clip_grad_norm_(
-                        critic.parameters(), self.max_grad_norm
-                    )
-                    critic.optimizer.step()
+                
             
     
     def update_value_normalizer(self, targets):
@@ -780,7 +777,8 @@ def get_actions(rl_strategy, next_observation):
     learning_mode = rl_strategy.learning_mode
     perform_evaluation = rl_strategy.perform_evaluation
 
-    # Pass observation through the actor network to get action logits (mean of action distribution)
+    # print("\nIn get_actions:")
+    # print(f"next_observation shape: {next_observation.shape}")    # Pass observation through the actor network to get action logits (mean of action distribution)
     action_logits, action_distribution = actor(next_observation)
     action_logits = action_logits.detach()
     logger.debug(f"Action logits: {action_logits}")
