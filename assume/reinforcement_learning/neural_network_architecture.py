@@ -193,12 +193,13 @@ class DistActor(MLPActor):
         nn.init.constant_(self.FC3.bias, 0.0)
 
 
-    def forward(self, obs):
+    def forward(self, obs, base_bid=None):
         x = F.relu(self.FC1(obs))
         x = F.relu(self.FC2(x))
         # Works with MATD3, output of softsign: [-1, 1]
         x = F.softsign(self.FC3(x))
-
+        if base_bid is not None:
+            x = x + base_bid
         # Create a normal distribution for continuous actions (with assumed standard deviation of 
         # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?)
         dist = th.distributions.Normal(x, 0.1) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)

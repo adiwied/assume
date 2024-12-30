@@ -46,7 +46,8 @@ class PPO(RLAlgorithm):
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
         value_clip_ratio: float = 0.2,
-        share_critic = False
+        share_critic = False,
+        use_base_bid = True
     ):
         super().__init__(
             learning_role=learning_role,
@@ -66,6 +67,7 @@ class PPO(RLAlgorithm):
         self.value_stats = {} # stats dictionary for value normalization
         self.keep_value_stats = True
         self.share_critic = share_critic
+        self.use_base_bid = use_base_bid
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -658,7 +660,10 @@ class PPO(RLAlgorithm):
                 log_probs_i = log_probs[:, i]  # Shape: [32]      (batch)
                 advantages_i = advantages[:, i] # Shape: [32]      (batch)
                 returns_i = returns[:, i] 
-                action_distribution = actor(state_i)[1]
+                base_bid = None
+                if self.use_base_bid:
+                    base_bid = state_i[0, -1].detach()
+                action_distribution = actor(state_i, base_bid)[1]
                 new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
                 
                 entropy = action_distribution.entropy().sum(-1)
@@ -779,7 +784,7 @@ def get_actions(rl_strategy, next_observation):
 
     # print("\nIn get_actions:")
     # print(f"next_observation shape: {next_observation.shape}")    # Pass observation through the actor network to get action logits (mean of action distribution)
-    action_logits, action_distribution = actor(next_observation)
+    action_logits, action_distribution = actor(next_observation, next_observation[-1])
     action_logits = action_logits.detach()
     logger.debug(f"Action logits: {action_logits}")
 
