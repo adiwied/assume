@@ -175,7 +175,7 @@ def constant_schedule(val: float) -> Schedule:
 
 
 def collect_obs_for_central_critic(
-    states: th.Tensor, i: int, obs_dim: int, unique_obs_dim: int, batch_size: int   
+    states: th.Tensor, i: int, obs_dim: int, unique_obs_dim: int, batch_size: int, public_info = True
 ) -> th.Tensor:
     """
     This function samels the observations from allagents for the central critic. 
@@ -193,6 +193,7 @@ def collect_obs_for_central_critic(
 
     # this takes the unique observations from all other agents assuming that
     # the unique observations are at the end of the observation vector
+    
     temp = th.cat(
         (
             states[:, :i, obs_dim - unique_obs_dim :].reshape(
@@ -204,15 +205,23 @@ def collect_obs_for_central_critic(
         ),
         axis=1,
     )
-
     # the final all_states vector now contains the current agent's observation
     # and the unique observations from all other agents
     all_states = th.cat(
         (states[:, i, :].reshape(batch_size, -1), temp), axis=1
     ).view(batch_size, -1)
+    
+    print(f"all_states_shape: {all_states.shape}")
+    
+    all_states_private = states[:, i, :].reshape(batch_size, -1)
+    print("------------not using public info------------")
 
+    print(f"all_states_private: {all_states_private.shape}")
 
-    return all_states
+    private_start_idx = obs_dim - unique_obs_dim
+    private_obs = states[:, i, private_start_idx:]
+    print(f"private_obs shape: {private_obs.shape}")  # Debug info
+    return all_states_private
 
 
 

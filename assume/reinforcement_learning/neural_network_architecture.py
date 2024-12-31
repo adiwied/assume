@@ -103,11 +103,15 @@ class CriticPPO(nn.Module):
         act_dim (int): Dimension of each action
     """
 
-    def __init__(self, n_agents: int, obs_dim: int, act_dim: int, float_type, unique_obs_dim: int = 0):
+    def __init__(self, n_agents: int, obs_dim: int, act_dim: int, float_type, public_info=True, unique_obs_dim: int = 0):
         super().__init__()
-
-        self.obs_dim = obs_dim + unique_obs_dim * (n_agents - 1)
-        self.act_dim = act_dim * n_agents 
+        if public_info:
+            self.obs_dim = obs_dim #+ unique_obs_dim * (n_agents - 1)
+            self.act_dim = act_dim #* n_agents 
+        else: 
+            self.obs_dim = obs_dim
+            self.act_dim = act_dim * n_agents
+            print("---using only private info---")
 
         if n_agents <= 50:
             self.FC_1 = nn.Linear(self.obs_dim + self.act_dim, 512, dtype=float_type)
