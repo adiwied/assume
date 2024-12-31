@@ -182,7 +182,8 @@ class DistActor(MLPActor):
     def __init__(self, obs_dim: int, act_dim: int, float_type, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
         
-        self.initialize_weights(final_gain=0.3)
+        self.initialize_weights(final_gain=0.1)
+        self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
         
     def initialize_weights(self, final_gain=np.sqrt(2)):
         for layer in [self.FC1, self.FC2]:
@@ -190,7 +191,7 @@ class DistActor(MLPActor):
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
-        nn.init.constant_(self.FC3.bias, 0.0)
+        nn.init.constant_(self.FC3.bias, 0.5771)
 
 
     def forward(self, obs, base_bid=None):
@@ -202,8 +203,9 @@ class DistActor(MLPActor):
             x = x + base_bid
         # Create a normal distribution for continuous actions (with assumed standard deviation of 
         # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?)
-        dist = th.distributions.Normal(x, 0.1) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
-                
+        action_std = self.log_std.exp().expand_as(x)
+
+        dist = th.distributions.Normal(x, action_std) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
         return x, dist
 
 

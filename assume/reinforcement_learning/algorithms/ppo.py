@@ -47,7 +47,7 @@ class PPO(RLAlgorithm):
         actor_architecture: str,
         value_clip_ratio: float = 0.2,
         share_critic = False,
-        use_base_bid = True
+        use_base_bid = False
     ):
         super().__init__(
             learning_role=learning_role,
@@ -660,10 +660,13 @@ class PPO(RLAlgorithm):
                 log_probs_i = log_probs[:, i]  # Shape: [32]      (batch)
                 advantages_i = advantages[:, i] # Shape: [32]      (batch)
                 returns_i = returns[:, i] 
+                #print(state_i[0, -1])
                 base_bid = None
                 if self.use_base_bid:
                     base_bid = state_i[0, -1].detach()
                 action_distribution = actor(state_i, base_bid)[1]
+                if counter == 0:
+                    print(f" u_id: {u_id}, std: {action_distribution.stddev[0]}")
                 new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
                 
                 entropy = action_distribution.entropy().sum(-1)
@@ -717,7 +720,7 @@ class PPO(RLAlgorithm):
                 #     + self.vf_coef * value_loss
                 #     #- self.entropy_coef * entropy.mean()
                 # )  # Use self.vf_coef and self.entropy_coef
-                actor_loss = policy_loss - self.entropy_coef * entropy.mean()
+                actor_loss = policy_loss #- self.entropy_coef * entropy.mean()
                 #logger.debug(f"total loss: {total_loss}")
 
                 # Zero the gradients and perform backpropagation for both actor and critic
@@ -781,10 +784,13 @@ def get_actions(rl_strategy, next_observation):
     device = rl_strategy.device
     learning_mode = rl_strategy.learning_mode
     perform_evaluation = rl_strategy.perform_evaluation
+    base_bid = None
+    # Pass observation through the actor network to get action logits (mean of action distribution)
+    if False:
+        base_bid = next_observation[-1]
 
-    # print("\nIn get_actions:")
-    # print(f"next_observation shape: {next_observation.shape}")    # Pass observation through the actor network to get action logits (mean of action distribution)
-    action_logits, action_distribution = actor(next_observation, next_observation[-1])
+    action_logits, action_distribution = actor(next_observation, base_bid)
+
     action_logits = action_logits.detach()
     logger.debug(f"Action logits: {action_logits}")
 
