@@ -179,11 +179,12 @@ class DistActor(MLPActor):
     """
     The actor based on the  neural network MLP actor that contrcuts a distribution for the action defintion.
     """
-    def __init__(self, obs_dim: int, act_dim: int, float_type, *args, **kwargs):
+    def __init__(self, obs_dim: int, act_dim: int, float_type, learn_std = True, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
-        
-        self.initialize_weights(final_gain=0.1)
-        self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
+        self.learn_std = learn_std
+        self.initialize_weights(final_gain=0.3)
+        if self.learn_std:
+            self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
         
     def initialize_weights(self, final_gain=np.sqrt(2)):
         for layer in [self.FC1, self.FC2]:
@@ -201,10 +202,13 @@ class DistActor(MLPActor):
         x = F.softsign(self.FC3(x))
         if base_bid is not None:
             x = x + base_bid
+            print("using base_bid")
         # Create a normal distribution for continuous actions (with assumed standard deviation of 
         # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?)
-        action_std = self.log_std.exp().expand_as(x)
-
+        if self.learn_std:
+            action_std = self.log_std.exp().expand_as(x)
+        else:
+            action_std = 0.1
         dist = th.distributions.Normal(x, action_std) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
         return x, dist
 

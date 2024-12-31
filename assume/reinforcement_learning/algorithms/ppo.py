@@ -47,7 +47,8 @@ class PPO(RLAlgorithm):
         actor_architecture: str,
         value_clip_ratio: float = 0.2,
         share_critic = False,
-        use_base_bid = False
+        use_base_bid = False,
+        learn_std = True,
     ):
         super().__init__(
             learning_role=learning_role,
@@ -68,6 +69,7 @@ class PPO(RLAlgorithm):
         self.keep_value_stats = True
         self.share_critic = share_critic
         self.use_base_bid = use_base_bid
+        self.learn_std = learn_std
         
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
@@ -338,6 +340,7 @@ class PPO(RLAlgorithm):
                 obs_dim=unit_strategy.obs_dim,
                 act_dim=unit_strategy.act_dim,
                 float_type=self.float_type,
+                learn_std = self.learn_std,
                 unique_obs_dim=unit_strategy.unique_obs_dim,
                 num_timeseries_obs_dim=unit_strategy.num_timeseries_obs_dim,
             ).to(self.device)
@@ -652,8 +655,7 @@ class PPO(RLAlgorithm):
                 
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
-                # print("\nIn update_policy:")
-                # print(f"states shape before actor: {states.shape}")
+                
                 # Evaluate the new log-probabilities and entropy under the current policy
                 state_i = states[:, i, :]      # Shape: [32, 50]  (batch, obs_dim)
                 actions_i = actions[:, i, :]   # Shape: [32, 2]   (batch, action_dim)
@@ -686,7 +688,7 @@ class PPO(RLAlgorithm):
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
-                if (not self.share_critic) or (self.share_critic == True and u_id == "pp_6"):
+                if (not self.share_critic) or (self.share_critic == True and i == 0):
                     value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
                     #print(f"value loss calculated for {u_id}")
 
@@ -751,8 +753,8 @@ class PPO(RLAlgorithm):
                 self.value_stats[u_id]['updated'] = True
             else:
                 # Exponential moving average update for each agent
-                self.value_stats[u_id]['mean'] = 0.99 * self.value_stats[u_id]['mean'] + 0.01 * targets[:, i].mean().item()
-                self.value_stats[u_id]['std'] = 0.99 * self.value_stats[u_id]['std'] + 0.01 * targets[:, i].std().item()
+                self.value_stats[u_id]['mean'] = 0.98 * self.value_stats[u_id]['mean'] + 0.02 * targets[:, i].mean().item()
+                self.value_stats[u_id]['std'] = 0.98 * self.value_stats[u_id]['std'] + 0.02 * targets[:, i].std().item()
 
 
     def denormalize_values(self, normalized_values, u_id):
