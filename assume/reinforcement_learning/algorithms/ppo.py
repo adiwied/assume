@@ -538,17 +538,16 @@ class PPO(RLAlgorithm):
         buffer_length = len(states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
         n_agents = len(self.learning_role.rl_strats)
         values = th.zeros((buffer_length,n_agents), device=self.device)
-
         all_actions = actions.view(buffer_length, -1).contiguous()
-        print(f"action shape {all_actions.squeeze().shape}")
+        
         for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
             all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length, public_info=self.public_info)
-            
+            agent_actions = actions[:,i,:].view(buffer_length,-1)
             if self.share_critic:
-                values[:,i] = self.shared_critic(all_states, all_actions).squeeze()
+                values[:,i] = self.shared_critic(all_states, agent_actions).squeeze()
             # Pass the current states through the critic network to get value estimates.
             else:
-                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, all_actions[:,i,:]).squeeze(), u_id)
+                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, agent_actions).squeeze(), u_id)
                 
         return values
     

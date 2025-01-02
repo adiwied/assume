@@ -211,16 +211,15 @@ def collect_obs_for_central_critic(
         (states[:, i, :].reshape(batch_size, -1), temp), axis=1
     ).view(batch_size, -1)
     
-    print(f"all_states_shape: {all_states.shape}")
+    #print(f"all_states_shape: {all_states.shape}")
     
     all_states_private = states[:, i, :].reshape(batch_size, -1)
-    print("------------not using public info------------")
 
-    print(f"all_states_private: {all_states_private.shape}")
+    #print(f"all_states_private: {all_states_private.shape}")
 
     private_start_idx = obs_dim - unique_obs_dim
     private_obs = states[:, i, private_start_idx:]
-    print(f"private_obs shape: {private_obs.shape}")  # Debug info
+    #print(f"private_obs shape: {private_obs.shape}")  # Debug info
     return all_states_private
 
 
