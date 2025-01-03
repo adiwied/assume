@@ -647,7 +647,8 @@ class PPO(RLAlgorithm):
             # Each agent has its own actor. Critic (value network) is centralized.
             for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
                 
-                values = self.get_values(states, actions)
+                values = self.get_values(states, actions)[:,i]
+                print(f"values.shape {values.shape}")
 
                 # Centralized
                 if not self.share_critic:
@@ -690,16 +691,16 @@ class PPO(RLAlgorithm):
 
                 # Value loss (mean squared error between the predicted values and returns)
                 if (not self.share_critic) or (self.share_critic == True and i == 0):
-                    value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
+                    value_loss = F.mse_loss(returns[:,i].squeeze(), values.squeeze())
                     #print(f"value loss calculated for {u_id}")
 
                     if self.value_clip_ratio is not None:
                         #print("value loss is beeing clipped")
-                        values_clipped = full_values + th.clamp(values - full_values,
+                        values_clipped = full_values[:,i] + th.clamp(values - full_values[:,i],
                         -self.value_clip_ratio,
                         self.value_clip_ratio
                         )
-                        clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
+                        clipped_value_loss = F.mse_loss(returns[:,i].squeeze(), values_clipped.squeeze())
 
                         value_loss = th.max(clipped_value_loss, value_loss)
                     
