@@ -105,10 +105,10 @@ class CriticPPO(nn.Module):
 
     def __init__(self, n_agents: int, obs_dim: int, act_dim: int, float_type, public_info=False, unique_obs_dim: int = 0):
         super().__init__()
-        if public_info:
+        if public_info: # critic will see all market information and actions
             self.obs_dim = obs_dim + unique_obs_dim * (n_agents - 1)
             self.act_dim = act_dim * n_agents 
-        else: 
+        else: # critic will only see public market info and his own actions, not the private information of other agents or their actions
             self.obs_dim = obs_dim
             self.act_dim = act_dim
             print("---using only private info---")
@@ -198,7 +198,8 @@ class DistActor(MLPActor):
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
-        nn.init.constant_(self.FC3.bias, 0.5771)
+        nn.init.constant_(self.FC3.bias, 0.5771) #TODO: make adjustable! 
+                                                 # Initial bias in last layer is marginal cost --> ecourage exploration similar to MATD3 exploration
 
 
     def forward(self, obs, base_bid=None):

@@ -72,7 +72,9 @@ class PPO(RLAlgorithm):
         self.use_base_bid = use_base_bid
         self.learn_std = learn_std
         self.public_info = public_info
-        
+        #check configuration
+        print("-----Config Check:-----")
+        print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info}")        
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(
@@ -425,7 +427,8 @@ class PPO(RLAlgorithm):
             obs_dim=strategy.obs_dim,
             act_dim=strategy.act_dim,
             unique_obs_dim=strategy.unique_obs_dim,
-            float_type=self.float_type
+            float_type=self.float_type,
+            public_info=self.public_info,
         ).to(self.device)
 
         self.shared_critic.optimizer = Adam(
@@ -463,6 +466,7 @@ class PPO(RLAlgorithm):
                 act_dim=strategy.act_dim,
                 unique_obs_dim=strategy.unique_obs_dim,
                 float_type=self.float_type,
+                public_info=self.public_info,
             )
 
             self.learning_role.critics[u_id].optimizer = Adam(
@@ -522,7 +526,7 @@ class PPO(RLAlgorithm):
         return actors_and_critics
     
     
-    def get_values(self, states, actions):
+    def get_values(self, all_states, all_actions):
         """
         Gets values for a unit based on the observation using PPO. 
         Denormalizes critic outputs using running statistics. Induces critic to learn normalized value predictions
@@ -535,19 +539,25 @@ class PPO(RLAlgorithm):
             torch.Tensor: The value of the observation.
         """
         i=0 # counter iterating over all agents for dynamic buffer slice
-        buffer_length = len(states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
+        buffer_length = len(all_states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
         n_agents = len(self.learning_role.rl_strats)
         values = th.zeros((buffer_length,n_agents), device=self.device)
-        all_actions = actions.view(buffer_length, -1).contiguous()
         
         for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
-            all_states = collect_obs_for_central_critic(states, i, self.obs_dim, self.unique_obs_dim, buffer_length, public_info=self.public_info)
-            agent_actions = actions[:,i,:].view(buffer_length,-1)
+
+            # prepare states and actions depending on which information critic should see
+            if self.public_info: 
+                select_states = collect_obs_for_central_critic(all_states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
+                select_actions = all_actions.view(buffer_length, -1).contiguous() # critic sees all information
+            else: 
+                select_states  = all_states[:,i,:].reshape(buffer_length, -1) 
+                select_actions = all_actions[:,i,:].view(buffer_length,-1) # critic does not see others private information
+
+            # Pass the appropriate states and actions to shared or individual critics
             if self.share_critic:
-                values[:,i] = self.shared_critic(all_states, agent_actions).squeeze()
-            # Pass the current states through the critic network to get value estimates.
+                values[:,i] = self.shared_critic(select_states, select_actions).squeeze()
             else:
-                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](all_states, agent_actions).squeeze(), u_id)
+                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](select_states, select_actions).squeeze(), u_id)
                 
         return values
     
@@ -593,11 +603,11 @@ class PPO(RLAlgorithm):
         logger.debug("Updating Policy")
         # We will iterate for multiple epochs to update both the policy (actor) and value (critic) networks
         # The number of epochs controls how many times we update using the same collected data (from the buffer).
+
         learning_rate = self.learning_role.calc_lr_from_progress(
             self.learning_role.get_progress_remaining()
         )
- 
-        #print(f"learning_rate: {learning_rate}")
+        # pass new learning rate to all actors and shared or individual critics TODO: make more concise!
         if not self.share_critic:
             for u_id, unit_strategy in self.learning_role.rl_strats.items():
                 self.update_learning_rate(
@@ -648,7 +658,7 @@ class PPO(RLAlgorithm):
             for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
                 
                 values = self.get_values(states, actions)[:,i]
-                print(f"values.shape {values.shape}")
+                #print(f"values.shape {values.shape}")
 
                 # Centralized
                 if not self.share_critic:
@@ -659,10 +669,10 @@ class PPO(RLAlgorithm):
                 actor = self.learning_role.rl_strats[u_id].actor
                 
                 # Evaluate the new log-probabilities and entropy under the current policy
-                state_i = states[:, i, :]      # Shape: [32, 50]  (batch, obs_dim)
-                actions_i = actions[:, i, :]   # Shape: [32, 2]   (batch, action_dim)
-                log_probs_i = log_probs[:, i]  # Shape: [32]      (batch)
-                advantages_i = advantages[:, i] # Shape: [32]      (batch)
+                state_i = states[:, i, :]      # Shape: (batch, obs_dim)
+                actions_i = actions[:, i, :]   # Shape: (batch, action_dim)
+                log_probs_i = log_probs[:, i]  # Shape: (batch)
+                advantages_i = advantages[:, i] # Shape: (batch)
                 returns_i = returns[:, i] 
                 #print(state_i[0, -1])
                 base_bid = None
@@ -692,29 +702,17 @@ class PPO(RLAlgorithm):
                 # Value loss (mean squared error between the predicted values and returns)
                 if (not self.share_critic) or (self.share_critic == True and i == 0):
                     value_loss = F.mse_loss(returns[:,i].squeeze(), values.squeeze())
-                    #print(f"value loss calculated for {u_id}")
 
                     if self.value_clip_ratio is not None:
-                        #print("value loss is beeing clipped")
-                        values_clipped = full_values[:,i] + th.clamp(values - full_values[:,i],
-                        -self.value_clip_ratio,
-                        self.value_clip_ratio
-                        )
+                        values_clipped = full_values[:,i] + th.clamp(values - full_values[:,i], -self.value_clip_ratio, self.value_clip_ratio)
                         clipped_value_loss = F.mse_loss(returns[:,i].squeeze(), values_clipped.squeeze())
-
+                        # use maximum between unclipped and clipped as actual value loss
                         value_loss = th.max(clipped_value_loss, value_loss)
                     
-                    
                     critic.optimizer.zero_grad()
-                
                     value_loss.backward()
-                    th.nn.utils.clip_grad_norm_(
-                        critic.parameters(), self.max_grad_norm
-                    )
+                    th.nn.utils.clip_grad_norm_(critic.parameters(), self.max_grad_norm)
                     critic.optimizer.step()
-                    #if counter == 1:
-                        #print("using pure critic loss")
-
                     logger.debug(f"value loss: {value_loss}")
 
                 # Total loss: policy loss + value loss - entropy bonus
@@ -730,14 +728,9 @@ class PPO(RLAlgorithm):
                 # Zero the gradients and perform backpropagation for both actor and critic
                 actor.optimizer.zero_grad()
                 actor_loss.backward()
-
                 # Clip gradients to prevent gradient explosion
-                th.nn.utils.clip_grad_norm_(
-                    actor.parameters(), self.max_grad_norm
-                )  # Use self.max_grad_norm
-                 # Use self.max_grad_norm
-
-                # Perform optimization steps
+                th.nn.utils.clip_grad_norm_(actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
+                # Perform optimization step
                 actor.optimizer.step()
                 
             

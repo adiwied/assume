@@ -160,6 +160,11 @@ class Learning(Role):
             self.max_grad_norm = learning_config["ppo"].get("max_grad_norm", 0.5)
             self.gae_lambda = learning_config["ppo"].get("gae_lambda", 0.95)
 
+            self.share_critic = learning_config["ppo"].get("share_critic", False)
+            self.use_base_bid = learning_config["ppo"].get("use_base_bid", False)
+            self.learn_std = learning_config["ppo"].get("learn_std", True)
+            self.public_info = learning_config["ppo"].get("public_info", False)
+
         
         
         cuda_device = (
@@ -379,6 +384,10 @@ class Learning(Role):
                 max_grad_norm=self.max_grad_norm,  # Maximum gradient norm for clipping
                 gae_lambda=self.gae_lambda,  # Lambda for Generalized Advantage Estimation (GAE)
                 actor_architecture=self.actor_architecture,  # Actor network architecture
+                share_critic=self.share_critic,
+                use_base_bid=self.use_base_bid,
+                learn_std=self.learn_std,
+                public_info=self.public_info,
             )
         else:
             logger.error(f"Learning algorithm {algorithm} not implemented!")
