@@ -104,7 +104,7 @@ base_ppo_sl_si_lstd_bb_long_98_1:
       price_unit: EUR/MWh
       market_mechanism: pay_as_clear
 
-base_ippo_sl_si_lstd_bb_long_private_actions:
+base_ippo_sl_si_lstd_bb_long_private_actions_cleanup_1:
   start_date: 2019-03-01 00:00
   end_date: 2019-04-01 00:00
   time_step: 1h
@@ -120,7 +120,7 @@ base_ippo_sl_si_lstd_bb_long_private_actions:
     learning_rate: 0.0003 # default learning rate
     learning_rate_schedule: linear
     validation_episodes_interval: 5 # after how many episodes the validation starts and the policy is updated
-    training_episodes: 100
+    training_episodes: 250
     gradient_steps: 10
     matd3:
       actor_architecture: mlp
@@ -141,7 +141,11 @@ base_ippo_sl_si_lstd_bb_long_private_actions:
       max_grad_norm: 0.3  # Gradient clipping value
       gae_lambda: 0.95  # GAE lambda for advantage estimation
       batch_size: 144  # Batch size for each update, if mini-batch approach is used (currently not implemented)
-      
+      # Adjust centralization info
+      share_critic: false
+      use_base_bid: false
+      learn_std: false
+      public_info: True
 
 
   markets_config:
