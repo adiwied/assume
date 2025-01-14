@@ -220,9 +220,10 @@ def _setup_wandb(learning_config):
                 "use_base_bid": learning_config["ppo"].get("use_base_bid", False),
                 "learn_std": learning_config["ppo"].get("learn_std", True),
                 "public_info": learning_config["ppo"].get("public_info", False),
+                "individual_values": learning_config["ppo"].get("individual_values", False),
             })
 
-            run_name = f"ppo_public_info_{learning_config["ppo"].get("public_info", False),}_share_critic_{learning_config["ppo"].get("share_critic", False),}_{time.time()}"
+            run_name = f"ppo_public_info_{learning_config["ppo"].get("public_info", False),}_share_critic_{learning_config["ppo"].get("share_critic", False),}_individual_values_{learning_config["ppo"].get("individual_values", False),}_{time.time()}"
             
             if learning_config["perform_evaluation"]:
                 run_name += "_eval"

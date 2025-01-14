@@ -164,6 +164,8 @@ class Learning(Role):
             self.use_base_bid = learning_config["ppo"].get("use_base_bid", False)
             self.learn_std = learning_config["ppo"].get("learn_std", True)
             self.public_info = learning_config["ppo"].get("public_info", False)
+            self.individual_values = learning_config["ppo"].get("individual_values", False)
+            
 
         
         
@@ -395,6 +397,7 @@ class Learning(Role):
                 use_base_bid=self.use_base_bid,
                 learn_std=self.learn_std,
                 public_info=self.public_info,
+                individual_values=self.individual_values
             )
         else:
             logger.error(f"Learning algorithm {algorithm} not implemented!")

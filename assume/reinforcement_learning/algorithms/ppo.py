@@ -49,7 +49,8 @@ class PPO(RLAlgorithm):
         share_critic = False,
         use_base_bid = False,
         learn_std = True,
-        public_info = False
+        public_info = False,
+        individual_values = False
     ):
         super().__init__(
             learning_role=learning_role,
@@ -73,10 +74,11 @@ class PPO(RLAlgorithm):
         self.learn_std = learn_std
         self.public_info = public_info
         self.wandb_step = 0
+        self.individual_values = individual_values
 
         #check configuration
         print("-----Config Check:-----")
-        print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info}")        
+        print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info} \nself.individual_values: {self.individual_values}")        
         # write error if different actor_architecture than dist is used
         if actor_architecture != "dist":
             raise ValueError(
@@ -638,7 +640,7 @@ class PPO(RLAlgorithm):
         with th.no_grad():
             # Pass the current states through the critic network to get value estimates.
             full_values = self.get_values(transitions.observations, transitions.actions)
-            
+            print(f"shape full_values : {full_values.shape}")
             # Compute advantages using Generalized Advantage Estimation (GAE)
             full_advantages, full_returns = self.get_advantages(transitions.rewards, full_values)
             
@@ -652,7 +654,7 @@ class PPO(RLAlgorithm):
         actions = transitions.actions
         log_probs = transitions.log_probs
         advantages = full_advantages
-        returns = full_returns
+        
 
         for counter in range(self.gradient_steps):
             self.n_updates += 1
@@ -661,8 +663,17 @@ class PPO(RLAlgorithm):
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
             for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
+                #calculate critic loss over own values or all
+                if self.individual_values: 
+                    values = self.get_values(states, actions)[:,i]
+                    returns = full_returns[:,i]
+                    old_values = full_values[:,i]
+                else: 
+                    values = self.get_values(states, actions)
+                    returns = full_returns
+                    old_values = full_values
                 
-                values = self.get_values(states, actions)[:,i]
+                #print(f"values shape {values.shape}, \nreturn shape {returns.shape}, \nold_values shape {old_values.shape}")
                 #print(f"values.shape {values.shape}")
 
                 # Centralized
@@ -678,7 +689,7 @@ class PPO(RLAlgorithm):
                 actions_i = actions[:, i, :]   # Shape: (batch, action_dim)
                 log_probs_i = log_probs[:, i]  # Shape: (batch)
                 advantages_i = advantages[:, i] # Shape: (batch)
-                returns_i = returns[:, i] 
+                returns_i = returns if self.individual_values else returns[:,i]
                 #print(state_i[0, -1])
                 base_bid = None
                 if self.use_base_bid:
@@ -706,11 +717,12 @@ class PPO(RLAlgorithm):
 
                 # Value loss (mean squared error between the predicted values and returns)
                 if (not self.share_critic) or (self.share_critic == True and i == 0):
-                    value_loss = F.mse_loss(returns[:,i].squeeze(), values.squeeze())
+                    value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
 
                     if self.value_clip_ratio is not None:
-                        values_clipped = full_values[:,i] + th.clamp(values - full_values[:,i], -self.value_clip_ratio, self.value_clip_ratio)
-                        clipped_value_loss = F.mse_loss(returns[:,i].squeeze(), values_clipped.squeeze())
+                        values_clipped = old_values + th.clamp(values - old_values, -self.value_clip_ratio, self.value_clip_ratio)
+                        clipped_value_loss = F.mse_loss(returns.squeeze(), values_clipped.squeeze())
+
                         # use maximum between unclipped and clipped as actual value loss
                         value_loss = th.max(clipped_value_loss, value_loss)
                     
