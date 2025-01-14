@@ -15,7 +15,7 @@ from assume.reinforcement_learning.algorithms.base_algorithm import RLAlgorithm
 from assume.reinforcement_learning.neural_network_architecture import CriticPPO
 from assume.reinforcement_learning.learning_utils import collect_obs_for_central_critic
 
-
+import wandb 
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +72,8 @@ class PPO(RLAlgorithm):
         self.use_base_bid = use_base_bid
         self.learn_std = learn_std
         self.public_info = public_info
+        self.wandb_step = 0
+
         #check configuration
         print("-----Config Check:-----")
         print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info}")        
@@ -525,6 +527,9 @@ class PPO(RLAlgorithm):
         print(self.value_stats)
         return actors_and_critics
     
+    def set_wandb_step(self, step: int) -> None:
+            """Set the wandb step counter to continue from a loaded state."""
+            self.wandb_step = step
     
     def get_values(self, all_states, all_actions):
         """
@@ -732,6 +737,130 @@ class PPO(RLAlgorithm):
                 th.nn.utils.clip_grad_norm_(actor.parameters(), self.max_grad_norm)  # Use self.max_grad_norm
                 # Perform optimization step
                 actor.optimizer.step()
+
+                # wandb logging for comparisons
+                if self.learning_role.learning_mode and wandb.run is not None:
+                    try:
+                        with th.no_grad():
+                            # Store per-agent metrics
+                            self.agent_metrics = getattr(self, 'agent_metrics', {})
+                            if i == 0:  # Initialize/reset aggregate metrics
+                                self.agent_metrics = {
+                                    'policy_loss': [],
+                                    'value_loss': [],
+                                    'entropy': [],
+                                    'mean_ratio': [],
+                                    'mean_action': [],
+                                    'action_std': [],
+                                    'returns': [],
+                                    'values': [],
+                                    'advantages': [],
+                                    'rewards': []
+                                }
+                            
+                            # Collect metrics for current agent
+                            agent_rewards = transitions.rewards[:, i]
+                            self.agent_metrics['policy_loss'].append(policy_loss.item())
+                            self.agent_metrics['value_loss'].append(value_loss.item() if value_loss else 0)
+                            self.agent_metrics['entropy'].append(entropy.mean().item())
+                            self.agent_metrics['mean_ratio'].append(ratio.mean().item())
+                            self.agent_metrics['mean_action'].append(actions_i.mean().item())
+                            self.agent_metrics['action_std'].append(actions_i.std().item())
+                            self.agent_metrics['returns'].append(returns_i.mean().item())
+                            self.agent_metrics['values'].append(values.mean().item())
+                            self.agent_metrics['advantages'].append(advantages_i.mean().item())
+                            self.agent_metrics['rewards'].append(agent_rewards.mean().item())
+
+                            # Log individual agent metrics
+                            agent_specific = {
+                                f"agents/{u_id}/policy_loss": policy_loss.item(),
+                                f"agents/{u_id}/value_loss": value_loss.item() if value_loss else 0,
+                                f"agents/{u_id}/entropy": entropy.mean().item(),
+                                f"agents/{u_id}/mean_ratio": ratio.mean().item(),
+                                f"agents/{u_id}/mean_action": actions_i.mean().item(),
+                                f"agents/{u_id}/action_std": actions_i.std().item(),
+                                f"agents/{u_id}/mean_returns": returns_i.mean().item(),
+                                f"agents/{u_id}/mean_values": values.mean().item(),
+                                f"agents/{u_id}/mean_advantages": advantages_i.mean().item(),
+                                f"agents/{u_id}/mean_reward": agent_rewards.mean().item(),
+                                f"agents/{u_id}/cumulative_reward": agent_rewards.sum().item(),
+                            }
+
+                            # If this is the last agent, calculate and log aggregate metrics
+                            if i == len(self.learning_role.rl_strats) - 1:
+                                aggregate_metrics = {
+                                    "training/mean_policy_loss": th.tensor(self.agent_metrics['policy_loss']).mean().item(),
+                                    "training/mean_value_loss": th.tensor(self.agent_metrics['value_loss']).mean().item(),
+                                    "training/mean_entropy": th.tensor(self.agent_metrics['entropy']).mean().item(),
+                                    "training/mean_ratio": th.tensor(self.agent_metrics['mean_ratio']).mean().item(),
+                                    "training/learning_rate": learning_rate,
+                                }
+
+                                # Core Training Progress for all agents
+                                training_metrics = {
+                                    "training/unclipped_value_loss": clipped_value_loss.item() if value_loss else 0,
+                                }
+
+                                # Episode Performance
+                                rewards_tensor = transitions.rewards.clone().detach()
+                                episode_metrics = {
+                                    "episode/cumulative_reward": rewards_tensor.sum().item(),
+                                    "episode/mean_reward": rewards_tensor.mean().item(),
+                                    "episode/mean_reward_per_agent": th.tensor(self.agent_metrics['rewards']).mean().item(),
+                                    "episode/episode_num": self.learning_role.episodes_done,
+                                }
+
+                                # values_flat = values.squeeze()
+                                # td_errors = values_flat - returns[:,i]
+
+                                # # Calculate correlation
+                                # v_mean = values_flat.mean()
+                                # v_std = values_flat.std()
+                                # r_mean = returns.mean()
+                                # r_std = returns.std()
+                                # v_centered = values_flat - v_mean
+                                # r_centered = returns - r_mean
+                                # correlation = (v_centered * r_centered).mean() / (v_std * r_std + 1e-8)
+
+                                # value_metrics = {
+                                #     "value/mean_td_error": td_errors.mean().item(),
+                                #     "value/explained_variance": 1 - (td_errors.var() / (returns.var() + 1e-8)).item(),
+                                #     "value/predicted_mean": values_flat.mean().item(),
+                                #     "value/actual_returns_mean": returns.mean().item(),
+                                #     "value/max_difference": td_errors.abs().max().item(),
+                                #     "value/correlation": correlation.item(),
+                                # }
+
+                                # Policy Updates
+                                policy_metrics = {
+                                    "policy/mean_action_all_agents": th.tensor(self.agent_metrics['mean_action']).mean().item(),
+                                    "policy/action_std_all_agents": th.tensor(self.agent_metrics['action_std']).mean().item(),
+                                }
+
+                                # Training Stability
+                                stability_metrics = {
+                                    "stability/advantage_mean": th.tensor(self.agent_metrics['advantages']).mean().item(),
+                                    "stability/advantage_std": advantages.std().item(),
+                                }
+
+                                # Combine all metrics
+                                metrics = {}
+                                metrics.update(agent_specific)
+                                metrics.update(aggregate_metrics)
+                                metrics.update(training_metrics)
+                                metrics.update(episode_metrics)
+                                #metrics.update(value_metrics)
+                                metrics.update(policy_metrics)
+                                metrics.update(stability_metrics)
+
+                                # Log everything in a single call at the end of processing all agents
+                                self.wandb_step = self.wandb_step + 1
+                                self.learning_role.wandb_step = self.wandb_step
+                                wandb.log(metrics, step=self.wandb_step)
+                    except Exception as e:
+                        logger.error(f"Failed to log metrics to WandB: {e}", exc_info=True)
+                        print(f"Warning: Failed to log metrics: {str(e)}")
+                                
                 
             
     
