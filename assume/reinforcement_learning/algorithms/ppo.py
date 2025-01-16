@@ -533,7 +533,7 @@ class PPO(RLAlgorithm):
             """Set the wandb step counter to continue from a loaded state."""
             self.wandb_step = step
     
-    def get_values(self, all_states, all_actions):
+    def get_values(self, all_states, all_actions, u_id=None, i=None, individual_values=False):
         """
         Gets values for a unit based on the observation using PPO. 
         Denormalizes critic outputs using running statistics. Induces critic to learn normalized value predictions
@@ -545,26 +545,39 @@ class PPO(RLAlgorithm):
         Returns:
             torch.Tensor: The value of the observation.
         """
-        i=0 # counter iterating over all agents for dynamic buffer slice
         buffer_length = len(all_states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
-        n_agents = len(self.learning_role.rl_strats)
-        values = th.zeros((buffer_length,n_agents), device=self.device)
-        
-        for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
 
-            # prepare states and actions depending on which information critic should see
-            if self.public_info: 
+        if individual_values:
+            if self.public_info:
                 select_states = collect_obs_for_central_critic(all_states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
-                select_actions = all_actions.view(buffer_length, -1).contiguous() # critic sees all information
+                select_actions = all_actions.view(buffer_length, -1).contiguous()
             else: 
                 select_states  = all_states[:,i,:].reshape(buffer_length, -1) 
-                select_actions = all_actions[:,i,:].view(buffer_length,-1) # critic does not see others private information
+                select_actions = all_actions[:,i,:].view(buffer_length,-1)
 
-            # Pass the appropriate states and actions to shared or individual critics
-            if self.share_critic:
-                values[:,i] = self.shared_critic(select_states, select_actions).squeeze()
-            else:
-                values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](select_states, select_actions).squeeze(), u_id)
+            values = self.learning_role.critics[u_id](select_states, select_actions).squeeze()
+
+        else: 
+            i=0 # counter iterating over all agents for dynamic buffer slice
+            n_agents = len(self.learning_role.rl_strats)
+            values = th.zeros((buffer_length,n_agents), device=self.device)
+
+            for i,u_id in enumerate(self.learning_role.rl_strats.keys()):
+
+                # prepare states and actions depending on which information critic should see
+                if self.public_info: 
+                    select_states = collect_obs_for_central_critic(all_states, i, self.obs_dim, self.unique_obs_dim, buffer_length)
+                    select_actions = all_actions.view(buffer_length, -1).contiguous() # critic sees all information
+                else: 
+                    select_states  = all_states[:,i,:].reshape(buffer_length, -1) 
+                    select_actions = all_actions[:,i,:].view(buffer_length,-1) # critic does not see others private information
+
+                # Pass the appropriate states and actions to shared or individual critics
+                if self.share_critic:
+                    values[:,i] = self.shared_critic(select_states, select_actions).squeeze()
+                else:
+                    #values[:,i] = self.denormalize_values(self.learning_role.critics[u_id](select_states, select_actions).squeeze(), u_id)
+                    values[:,i] = self.learning_role.critics[u_id](select_states, select_actions).squeeze()
                 
         return values
     
@@ -575,7 +588,7 @@ class PPO(RLAlgorithm):
         advantages = th.zeros_like(rewards)
         returns = th.zeros_like(rewards)
         last_gae = 0
-        
+
         # Iterate through the collected experiences in reverse order to calculate advantages and returns
         for t in reversed(range(len(rewards))):
             
@@ -640,7 +653,7 @@ class PPO(RLAlgorithm):
         with th.no_grad():
             # Pass the current states through the critic network to get value estimates.
             full_values = self.get_values(transitions.observations, transitions.actions)
-            print(f"shape full_values : {full_values.shape}")
+            #print(f"shape full_values : {full_values.shape}")
             # Compute advantages using Generalized Advantage Estimation (GAE)
             full_advantages, full_returns = self.get_advantages(transitions.rewards, full_values)
             
@@ -665,7 +678,7 @@ class PPO(RLAlgorithm):
             for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
                 #calculate critic loss over own values or all
                 if self.individual_values: 
-                    values = self.get_values(states, actions)[:,i]
+                    values = self.get_values(states, actions, u_id, i, self.individual_values)
                     returns = full_returns[:,i]
                     old_values = full_values[:,i]
                 else: 
@@ -679,7 +692,8 @@ class PPO(RLAlgorithm):
                 # Centralized
                 if not self.share_critic:
                     critic = self.learning_role.critics[u_id]
-                else: critic = self.shared_critic
+                else: 
+                    critic = self.shared_critic
                 
                 # Decentralized
                 actor = self.learning_role.rl_strats[u_id].actor
@@ -695,8 +709,8 @@ class PPO(RLAlgorithm):
                 if self.use_base_bid:
                     base_bid = state_i[0, -1].detach()
                 action_distribution = actor(state_i, base_bid)[1]
-                if counter == 0:
-                    print(f" u_id: {u_id}, std: {action_distribution.stddev[0]}")
+                # if counter == 0:
+                #     print(f" u_id: {u_id}, std: {action_distribution.stddev[0]}")
                 new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
                 
                 entropy = action_distribution.entropy().sum(-1)
