@@ -17,6 +17,7 @@ from assume.reinforcement_learning.algorithms.ppo import PPO
 from assume.reinforcement_learning.buffer import ReplayBuffer, RolloutBuffer
 from assume.reinforcement_learning.learning_utils import linear_schedule_func
 
+import wandb
 logger = logging.getLogger(__name__)
 
 
@@ -196,6 +197,11 @@ class Learning(Role):
         # List of avg changes
         self.avg_rewards = []
         self.wandb_step = 0
+        self.eval_wandb_run = None
+        self.train_step = 0
+        self.test_step = 0
+        self.wandb_metrics_initialized = False
+        self.initialize_wandb_metrics()
 
     # TD3 and PPO
     def load_inter_episodic_data(self, inter_episodic_data):
@@ -213,13 +219,18 @@ class Learning(Role):
         self.eval_episodes_done = inter_episodic_data["eval_episodes_done"]
         self.max_eval = inter_episodic_data["max_eval"]
         self.rl_eval = inter_episodic_data["all_eval"]
+        print(f"rl_eval : {self.rl_eval}")
         self.avg_rewards = inter_episodic_data["avg_all_eval"]
         self.buffer = inter_episodic_data["buffer"]
 
         # Set step counter in the algorithm instance
         self.wandb_step = inter_episodic_data.get("wandb_step", 0)
+        self.train_step = inter_episodic_data.get("train_step", 0)
+        
+
         if hasattr(self.rl_algorithm, 'set_wandb_step'):
             self.rl_algorithm.set_wandb_step(self.wandb_step)
+        
 
         if self.rl_algorithm_name == "matd3":
             # if enough initial experience was collected according to specifications in learning config
@@ -248,6 +259,7 @@ class Learning(Role):
             "actors_and_critics": self.rl_algorithm.extract_policy(),
             "noise_scale": self.get_noise_scale(),
             "wandb_step" : self.wandb_step,
+            "train_step" : self.train_step,
         }
 
     # TD3 and PPO
@@ -470,6 +482,33 @@ class Learning(Role):
             logger.error("tried to save policies but did not get any metrics")
             return
         # if the current values are a new max in one of the metrics - we store them in the default folder
+        if not metrics:
+            logger.error("tried to save policies but did not get any metrics")
+            return
+
+        if wandb.run is not None:
+            try:
+
+                eval_metrics = {}
+                
+                # Transform metrics for evaluation logging
+                for metric, value in metrics.items():
+                    # Basic metrics
+                    eval_metrics[f"eval/{metric}"] = value.mean() / 720
+                    
+                    eval_metrics[f"eval/{metric}_best"] = self.max_eval[metric]
+                    
+                    
+                # Add the eval_episodes_done as its own metric for step counting
+                eval_metrics["eval_episodes_done"] = self.eval_episodes_done
+                
+                # Log evaluation metrics with explicit eval_episodes_done
+                wandb.log(eval_metrics)
+                
+            except Exception as e:
+                logger.error(f"Failed to log evaluation metrics to WandB: {e}", exc_info=True)
+                print(f"Warning: Failed to log evaluation metrics: {str(e)}")
+
 
         # add current reward to list of all rewards
         for metric, value in metrics.items():
@@ -520,3 +559,25 @@ class Learning(Role):
 
                         return True
             return False
+        
+
+    def initialize_wandb_metrics(self):
+        """Initialize WandB metrics if not already done."""
+        if not self.wandb_metrics_initialized and wandb.run is not None:
+            # Define the step metrics first
+            wandb.define_metric("Steps")
+            wandb.define_metric("eval_episodes_done")
+            
+            # Define which metrics use which steps
+            wandb.define_metric("train/*", step_metric="Steps")
+            wandb.define_metric("training/*", step_metric="Steps")
+            wandb.define_metric("policy/*", step_metric="Steps")
+            wandb.define_metric("stability/*", step_metric="Steps")
+            wandb.define_metric("episode/*", step_metric="Steps")
+            wandb.define_metric("agents/*", step_metric="Steps")
+            wandb.define_metric("value/*", step_metric="Steps")
+            
+            # Evaluation metrics use their own step counter
+            wandb.define_metric("eval/*", step_metric="eval_episodes_done")
+            
+            self.wandb_metrics_initialized = True

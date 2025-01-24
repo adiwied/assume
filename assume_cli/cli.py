@@ -191,40 +191,50 @@ def _setup_wandb(learning_config):
             except Exception as e:
                 print(f"Warning: Failed to read wandb API key: {e}")
 
+            # Get experiment name and algo detail, with defaults if not provided
+            experiment_name = learning_config.get("experiment_name", "default_experiment")
+            algo_detail = learning_config.get("algo_detail", "default_algo")
+            algorithm = learning_config.get("algorithm", "noname")
+
             run_config = {
+                "experiment_name": experiment_name,
+                "algo_detail": algo_detail,
                 "algorithm": {
                     "name": learning_config["algorithm"],
                     "learning_rate": learning_config["learning_rate"],
-                    "batch_size": learning_config["ppo"]["batch_size"],
-                    "gamma": learning_config["ppo"]["gamma"],
+                    "batch_size": learning_config[algorithm]["batch_size"],
+                    "gamma": learning_config[algorithm]["gamma"],
                     "gradient_steps": learning_config["gradient_steps"]
                 },
                 "architecture": {
-                    "actor": learning_config["ppo"]["actor_architecture"],
+                    "actor": learning_config[algorithm]["actor_architecture"],
                     "device": str(learning_config["device"])
                 },
                 "training": {
                     "total_episodes": learning_config["training_episodes"],
-                    "train_freq": learning_config["ppo"]["train_freq"],
-                    #": learning_config["episodes_collecting_initial_experience"]
+                    "train_freq": learning_config[algorithm]["train_freq"],
                 }
             }
+            if algorithm == "ppo":
+                run_config["algorithm"].update({
+                    "clip_ratio": learning_config["ppo"]["clip_ratio"],
+                    "entropy_coef": learning_config["ppo"]["entropy_coef"],
+                    "value_coeff": learning_config["ppo"]["vf_coef"],
+                    "max_grad_norm": learning_config["ppo"]["max_grad_norm"],
+                    "gae_lambda": learning_config["ppo"]["gae_lambda"],
+                    "share_critic": learning_config["ppo"].get("share_critic", False),
+                    "use_base_bid": learning_config["ppo"].get("use_base_bid", False),
+                    "learn_std": learning_config["ppo"].get("learn_std", True),
+                    "public_info": learning_config["ppo"].get("public_info", False),
+                    "individual_values": learning_config["ppo"].get("individual_values", False),
+                })
 
-            run_config["algorithm"].update({
-                "clip_ratio": learning_config["ppo"]["clip_ratio"],
-                "entropy_coef": learning_config["ppo"]["entropy_coef"],
-                "value_coeff": learning_config["ppo"]["vf_coef"],
-                "max_grad_norm": learning_config["ppo"]["max_grad_norm"],
-                "gae_lambda": learning_config["ppo"]["gae_lambda"],
-                "share_critic": learning_config["ppo"].get("share_critic", False),
-                "use_base_bid": learning_config["ppo"].get("use_base_bid", False),
-                "learn_std": learning_config["ppo"].get("learn_std", True),
-                "public_info": learning_config["ppo"].get("public_info", False),
-                "individual_values": learning_config["ppo"].get("individual_values", False),
-            })
+                # Create run name including experiment_name and algo_detail
+                run_name = f"{experiment_name}_{algo_detail}_{algorithm}_public_info_{learning_config["ppo"].get("public_info", False),}_share_critic_{learning_config["ppo"].get("share_critic", False),}_individual_values_{learning_config["ppo"].get("individual_values", False),}_{time.time()}"
+                
+            elif algorithm == "matd3":
+                run_name = f"{experiment_name}_{algo_detail}_{algorithm}_{time.time()}"
 
-            run_name = f"ppo_public_info_{learning_config["ppo"].get("public_info", False),}_share_critic_{learning_config["ppo"].get("share_critic", False),}_individual_values_{learning_config["ppo"].get("individual_values", False),}_{time.time()}"
-            
             if learning_config["perform_evaluation"]:
                 run_name += "_eval"
             
@@ -232,27 +242,26 @@ def _setup_wandb(learning_config):
                 project="ASSUME-PPO",
                 name=run_name, 
                 config=run_config,
-                group=learning_config.get("experiment_group", None),  # Group related runs
+                group=experiment_name,
                 tags=[
                     "ppo",
                     f"batch_{learning_config["ppo"]["batch_size"]}",
                     "evaluation" if learning_config["perform_evaluation"] else "training",
-                    # learning_config.get("custom_tag", None)
+                    algo_detail,
+                    experiment_name
                 ],
                 mode="offline" if learning_config.get("wandb_offline", False) else "online",
                 settings=wandb.Settings(
                     start_method="thread",
-                    _disable_stats=True  # Disable system stats collection
-                    , 
+                    _disable_stats=True
                 ),
             )
             # Log code-saving configuration
-            wandb.run.log_code = True  # Save source code
+            wandb.run.log_code = True
                         
         except Exception as e:
             print(f"Failed to initialize wandb: {e}") 
             print("Continuing without logging")
-
 if __name__ == "__main__":
     cli()
 

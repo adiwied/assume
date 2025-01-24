@@ -215,7 +215,7 @@ class DistActor(MLPActor):
         if self.learn_std:
             action_std = self.log_std.exp().expand_as(x)
         else:
-            action_std = 0.1
+            action_std = 0.2
         dist = th.distributions.Normal(x, action_std) # --> eventuell als hyperparameter und eventuell sigmoid (0,1)
         return x, dist
 

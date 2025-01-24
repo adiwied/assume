@@ -555,6 +555,7 @@ class PPO(RLAlgorithm):
                 select_states  = all_states[:,i,:].reshape(buffer_length, -1) 
                 select_actions = all_actions[:,i,:].view(buffer_length,-1)
 
+            #values = self.denormalize_values(self.learning_role.critics[u_id](select_states, select_actions).squeeze(), u_id)
             values = self.learning_role.critics[u_id](select_states, select_actions).squeeze()
 
         else: 
@@ -609,6 +610,10 @@ class PPO(RLAlgorithm):
         mean_advantages = th.nanmean(advantages)
         std_advantages = th.std(advantages)
         advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
+
+        # mean_advantages = th.nanmean(advantages, dim=0, keepdim=True) 
+        # std_advantages = th.std(advantages, dim=0, keepdim=True)       
+        # advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
         #TODO: Should we detach here? I though because of normalisation not being included in backward
         # but unsure if this is correct
@@ -879,10 +884,13 @@ class PPO(RLAlgorithm):
                                 metrics.update(policy_metrics)
                                 metrics.update(stability_metrics)
 
-                                # Log everything in a single call at the end of processing all agents
-                                self.wandb_step = self.wandb_step + 1
-                                self.learning_role.wandb_step = self.wandb_step
-                                wandb.log(metrics, step=self.wandb_step)
+                                # Add the Steps metric for training data
+                                metrics["Steps"] = self.learning_role.train_step
+                                self.learning_role.train_step += 1
+                                
+                                # Log with the metrics
+                                wandb.log(metrics)
+                               
                     except Exception as e:
                         logger.error(f"Failed to log metrics to WandB: {e}", exc_info=True)
                         print(f"Warning: Failed to log metrics: {str(e)}")
