@@ -188,7 +188,7 @@ class DistActor(MLPActor):
     def __init__(self, obs_dim: int, act_dim: int, float_type, learn_std = True, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
         self.learn_std = learn_std
-        self.initialize_weights(final_gain=0.3)
+        self.initialize_weights(final_gain=0.1)
         if self.learn_std:
             self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
         
@@ -198,7 +198,7 @@ class DistActor(MLPActor):
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
-        nn.init.constant_(self.FC3.bias, 0.5771) #TODO: make adjustable! 
+        nn.init.constant_(self.FC3.bias, 0.0) #TODO: make adjustable! 
                                                  # Initial bias in last layer is marginal cost --> ecourage exploration similar to MATD3 exploration
 
 
