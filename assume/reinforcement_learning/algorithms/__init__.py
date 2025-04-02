@@ -8,10 +8,12 @@ from assume.reinforcement_learning.neural_network_architecture import (
     MLPActor,
     LSTMActor,
     DistActor,
+    DistLSTMActor,
 )
 
 actor_architecture_aliases: dict[str, type[nn.Module]] = {
     "mlp": MLPActor,
     "lstm": LSTMActor,
     "dist": DistActor,
+    "distlstm": DistLSTMActor,
 }

@@ -188,7 +188,7 @@ class DistActor(MLPActor):
     def __init__(self, obs_dim: int, act_dim: int, float_type, learn_std = True, *args, **kwargs):
         super().__init__(obs_dim, act_dim, float_type, *args, **kwargs)
         self.learn_std = learn_std
-        self.initialize_weights(final_gain=0.1)
+        self.initialize_weights(final_gain=0.3)
         if self.learn_std:
             self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
         
@@ -198,7 +198,7 @@ class DistActor(MLPActor):
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
-        nn.init.constant_(self.FC3.bias, 0.0) #TODO: make adjustable! 
+        nn.init.constant_(self.FC3.bias, 0.577) #TODO: make adjustable! 
                                                  # Initial bias in last layer is marginal cost --> ecourage exploration similar to MATD3 exploration
 
 
@@ -207,9 +207,6 @@ class DistActor(MLPActor):
         x = F.relu(self.FC2(x))
         # Works with MATD3, output of softsign: [-1, 1]
         x = F.softsign(self.FC3(x))
-        if base_bid is not None:
-            x = x + base_bid
-            print("using base_bid")
         # Create a normal distribution for continuous actions (with assumed standard deviation of 
         # TODO: 0.01/0.0 as in marlbenchmark or 1.0 or sheduled decrease?)
         if self.learn_std:
@@ -304,3 +301,59 @@ class LSTMActor(Actor):
             x = x.squeeze(0)
 
         return x
+
+
+class DistLSTMActor(LSTMActor):
+    """
+    LSTM based actor for PPO which can learn an action distribution
+    """
+    def __init__(
+        self,
+        obs_dim: int,
+        act_dim: int,
+        float_type,
+        unique_obs_dim: int = 2,
+        num_timeseries_obs_dim: int = 2,
+        learn_std: bool = True,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            float_type=float_type,
+            unique_obs_dim=unique_obs_dim,
+            num_timeseries_obs_dim=num_timeseries_obs_dim,
+            *args,
+            **kwargs,
+        )
+
+        self.learn_std = learn_std
+
+        if self.learn_std:
+            self.log_std = nn.Parameter(th.ones(act_dim) * np.log(0.1))
+
+        self.initialize_weights()
+
+        print("---initialized LSTM Actor---")
+    
+    def initialize_weights(self, final_gain=0.3):
+        
+        for layer in [self.FC1]:
+            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+            nn.init.constant_(layer.bias, 0.0)
+            
+        nn.init.orthogonal_(self.FC2.weight, gain=final_gain)
+        nn.init.constant_(self.FC2.bias, 0.577)
+    
+    def forward(self, obs):
+        action_mean = super().forward(obs)
+
+        if self.learn_std:
+            action_std = self.log_std.exp().expand_as(action_mean)
+        else:
+            action_std = th.ones_like(action_mean) * 0.2
+
+        dist = th.distributions.Normal(action_mean, action_std)
+
+        return action_mean, dist

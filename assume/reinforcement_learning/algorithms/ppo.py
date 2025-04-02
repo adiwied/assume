@@ -6,7 +6,7 @@ import logging
 import os
 
 import torch as th
-th.autograd.set_detect_anomaly(True)
+#th.autograd.set_detect_anomaly(True)
 from torch.nn import functional as F
 from torch.optim import Adam
 
@@ -80,7 +80,7 @@ class PPO(RLAlgorithm):
         print("-----Config Check:-----")
         print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info} \nself.individual_values: {self.individual_values}")        
         # write error if different actor_architecture than dist is used
-        if actor_architecture != "dist":
+        if actor_architecture != "dist" and actor_architecture != "distlstm":
             raise ValueError(
                 "PPO only supports the 'dist' actor architecture. Please define 'dist' as actor architecture in config."
             )
@@ -713,7 +713,8 @@ class PPO(RLAlgorithm):
                 base_bid = None
                 if self.use_base_bid:
                     base_bid = state_i[0, -1].detach()
-                action_distribution = actor(state_i, base_bid)[1]
+                # action_distribution = actor(state_i, base_bid)[1]
+                action_distribution = actor(state_i)[1]
                 # if counter == 0:
                 #     print(f" u_id: {u_id}, std: {action_distribution.stddev[0]}")
                 new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
@@ -949,7 +950,7 @@ def get_actions(rl_strategy, next_observation):
     if False:
         base_bid = next_observation[-1]
 
-    action_logits, action_distribution = actor(next_observation, base_bid)
+    action_logits, action_distribution = actor(next_observation)
 
     action_logits = action_logits.detach()
     logger.debug(f"Action logits: {action_logits}")
