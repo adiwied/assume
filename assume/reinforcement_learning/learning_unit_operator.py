@@ -223,10 +223,7 @@ class RLUnitsOperator(UnitsOperator):
 
             # Convert pandas Series to torch Tensor
             obs_tensor = th.stack(unit.outputs["rl_observations"][:values_len], dim=0)
-
-            actions_tensor = th.stack(
-                unit.outputs["rl_actions"][:values_len], dim=0
-            ).reshape(-1, act_dim)
+            actions_tensor = th.stack(unit.outputs["rl_actions"][:values_len], dim=0)
 
             # In the second dimension, the tensors include the number of the learning units
             # Three dimensions: Steps, learning units, observation/action dimensions
@@ -248,25 +245,15 @@ class RLUnitsOperator(UnitsOperator):
             unit.reset_saved_rl_data()
 
         # convert all_actions list of tensor to numpy 2D array
-        all_observations = (
-            all_observations.squeeze()
-            .cpu()
-            .numpy()
-            .reshape(-1, learning_unit_count, obs_dim)
-        )
-        all_actions = (
-            all_actions.squeeze()
-            .cpu()
-            .numpy()
-            .reshape(-1, learning_unit_count, act_dim)
-        )
+        all_observations = all_observations.numpy(force=True)
+        all_actions = all_actions.numpy(force=True)
 
-
-        all_rewards = np.array(all_rewards).reshape(-1, learning_unit_count)
+        all_rewards = np.array(all_rewards).T
+        
 
         # For PPO
         if unit.outputs["rl_log_probs"]: # and all(t.numel() > 0 for t in unit.outputs["rl_log_probs"][:values_len]):
-            all_log_probs = all_log_probs.detach().cpu().numpy().reshape(-1, learning_unit_count, 1)
+            all_log_probs = all_log_probs.detach().cpu().numpy(force=True)
 
             rl_agent_data = (all_observations, all_actions, all_rewards, all_log_probs)
         # For MATD3
