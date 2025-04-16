@@ -579,44 +579,47 @@ def rename_study_case(path: str, old_key: str, new_key: str):
 
 def check_for_tensors(data):
     """
-    Checks if the data contains tensors and converts them to native Python types.
-
+    Checks if the data contains tensors or numpy types and converts them to native Python types.
     Supports both pandas.Series and list of dictionaries.
-
+    
     Args:
         data (pandas.Series or list of dicts): The data to be checked.
-
     Returns:
-        The data with tensors converted to native Python types.
+        The data with tensors and numpy types converted to native Python types.
     """
     try:
         import torch as th
-
+        import numpy as np
+        
         if isinstance(data, pd.Series):
-            # Vectorized check for tensors
-            tensor_mask = data.apply(lambda x: isinstance(x, th.Tensor))
+            # Vectorized check for tensors and numpy types
+            tensor_mask = data.apply(lambda x: isinstance(x, (th.Tensor, np.ndarray, np.integer, np.floating, np.bool_)))
             if tensor_mask.any():
-                # Convert tensors to their scalar values
-                data[tensor_mask] = data[tensor_mask].apply(lambda x: x.item())
-
+                # Convert tensors/numpy to their scalar values
+                data[tensor_mask] = data[tensor_mask].apply(lambda x: x.item() if hasattr(x, 'item') else x)
+                
         elif isinstance(data, list):
             # Check if it's a list of dictionaries
             if all(isinstance(item, dict) for item in data):
                 for d in data:
                     for key, value in d.items():
-                        if isinstance(value, th.Tensor):
+                        if isinstance(value, (th.Tensor, np.ndarray)):
                             d[key] = value.item()
-
+                        elif isinstance(value, (np.integer, np.floating, np.bool_)):
+                            d[key] = value.item()
         else:
             # If data is a single value, check its type directly
-            if isinstance(data, th.Tensor):
+            if isinstance(data, (th.Tensor, np.ndarray)):
                 data = data.item()
-
+            elif isinstance(data, (np.integer, np.floating, np.bool_)):
+                data = data.item()
+                
     except ImportError:
-        # If torch is not installed, return the data unchanged
+        # If torch/numpy is not installed, return the data unchanged
         pass
-
+        
     return data
+ 
 
 
 # Define a context manager to suppress output
