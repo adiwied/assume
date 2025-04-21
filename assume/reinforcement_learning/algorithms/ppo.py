@@ -45,7 +45,7 @@ class PPO(RLAlgorithm):
         max_grad_norm: float,  # Gradient clipping value
         gae_lambda: float,  # GAE lambda for advantage estimation
         actor_architecture: str,
-        value_clip_ratio: float = 0.1,
+        value_clip_ratio: float = 0.2, # changed for overnight simulation
         share_critic = False,
         use_base_bid = False,
         learn_std = True,
