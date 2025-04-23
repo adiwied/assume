@@ -36,6 +36,12 @@ class AbstractLearningStrategy(LearningStrategy):
             unique_obs_dim=self.unique_obs_dim,
             num_timeseries_obs_dim=self.num_timeseries_obs_dim,
         ).to(self.device)
+
+        # quick fix to analyse lstm actor without learn_std
+        if hasattr(self.actor, 'log_std') and 'log_std' not in params["actor"]:
+            # Initialize log_std with default value
+            params["actor"]["log_std"] = th.ones(self.act_dim, dtype=self.float_type, device=self.device) * th.log(th.tensor(0.1))
+
         self.actor.load_state_dict(params["actor"])
 
         if self.learning_mode:

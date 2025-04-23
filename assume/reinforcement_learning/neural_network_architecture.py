@@ -352,7 +352,7 @@ class DistLSTMActor(LSTMActor):
         if self.learn_std:
             action_std = self.log_std.exp().expand_as(action_mean)
         else:
-            action_std = th.ones_like(action_mean) * 0.2
+            action_std = th.ones_like(action_mean) * 0.1
 
         dist = th.distributions.Normal(action_mean, action_std)
 
