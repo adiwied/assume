@@ -108,6 +108,15 @@ def create_parser() -> argparse.ArgumentParser:
         help="run simulation with multiple processes",
         action="store_true",
     )
+
+    parser.add_argument( "--seed", 
+                         help="random seed for reproducibility", 
+                         default=42, 
+                         type=int, 
+     )
+
+
+
     return parser
 
 
@@ -118,6 +127,20 @@ def cli(args=None):
 
     argcomplete.autocomplete(parser)
     args = parser.parse_args(args)
+
+    # set random seeds for experiment reproducability
+    seed = args.seed  # Use the command line argument
+    import random
+    import numpy as np
+    import torch as th
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    th.manual_seed(seed)
+    # Log the seed being used
+    logging.info(f"Using random seed: {seed}")
+    print(f"Using Random seed: {seed}")
+
     if args.db_uri:
         db_uri = make_url(args.db_uri)
     else:
