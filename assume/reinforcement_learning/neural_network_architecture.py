@@ -198,9 +198,8 @@ class DistActor(MLPActor):
             nn.init.constant_(layer.bias, 0.0)
         # use smaller gain for final layer
         nn.init.orthogonal_(self.FC3.weight, gain=final_gain)
-        nn.init.constant_(self.FC3.bias, 0.577) #TODO: make adjustable! 
-                                                 # Initial bias in last layer is marginal cost --> ecourage exploration similar to MATD3 exploration
-
+        nn.init.constant_(self.FC3.bias, 0.577) # used this to make actors bid higher prices than 0 in the beginning. Because of softsign, the average action gets initialized as 0.36. 
+                                                # As the bids remain below MC in test cases, a minor boost. Alternatively, increase action std in the beginning so agents will see higher prices too
 
     def forward(self, obs, base_bid=None):
         x = F.relu(self.FC1(obs))
@@ -303,7 +302,7 @@ class LSTMActor(Actor):
         return x
 
 
-class DistLSTMActor(LSTMActor):
+class DistLSTMActor(LSTMActor): # experimental only
     """
     LSTM based actor for PPO which can learn an action distribution
     """

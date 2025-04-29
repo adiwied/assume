@@ -76,7 +76,7 @@ class PPO(RLAlgorithm):
         self.wandb_step = 0
         self.individual_values = individual_values
 
-        #check configuration
+        #show modeller his configuration choices for control
         print("-----Config Check:-----")
         print(f"self.value_clip_ratio: {self.value_clip_ratio}\nshare_critic: {self.share_critic}\nself.use_base_bid: {self.use_base_bid}\nself.learn_std: {self.learn_std}\nself.public_info: {self.public_info} \nself.individual_values: {self.individual_values}")        
         # write error if different actor_architecture than dist is used
@@ -96,28 +96,6 @@ class PPO(RLAlgorithm):
         """
         self.save_critic_params(directory=f"{directory}/critics")
         self.save_actor_params(directory=f"{directory}/actors")
-
- 
-    # Removed critic_target in comparison to MATD3
-    # Decentralized
-    # def save_critic_params(self, directory):
-    #     """
-    #     Save the parameters of critic networks.
-
-    #     This method saves the parameters of the critic networks, including the critic's state_dict and the critic's optimizer state_dict. 
-    #     It organizes the saved parameters into a directory structure specific to the critic associated with each learning strategy.
-
-    #     Args:
-    #         directory (str): The base directory for saving the parameters.
-    #     """
-    #     os.makedirs(directory, exist_ok=True)
-    #     for u_id in self.learning_role.rl_strats.keys():
-    #         obj = {
-    #             "critic": self.learning_role.rl_strats[u_id].critic.state_dict(),
-    #             "critic_optimizer": self.learning_role.rl_strats[u_id].critic.optimizer.state_dict(),
-    #         }
-    #         path = f"{directory}/critic_{u_id}.pt"
-            # th.save(obj, path)
 
 
     # Centralized
@@ -306,7 +284,7 @@ class PPO(RLAlgorithm):
             self.act_dim = actors_and_critics["act_dim"]
             self.unique_obs_dim = actors_and_critics["unique_obs_dim"]
 
-            #carry over value_stats from previous episode
+            #carry over value_stats from previous episode when using value normalization
             #
             if self.keep_value_stats:
                 self.value_stats = actors_and_critics.get("value_stats", {})
@@ -375,46 +353,7 @@ class PPO(RLAlgorithm):
         else:
             self.act_dim = act_dim_list[0]
 
-    # Removed target_critics in comparison to MATD3
-    # Changed initialization of CriticPPO compared to MATD3
-    # Decentralized
-    # def create_critics(self) -> None:
-    #     """
-    #     Create decentralized critic networks for reinforcement learning.
-
-    #     This method initializes a separate critic network for each agent in the reinforcement learning setup.
-    #     Each critic learns to predict the value function based on the individual agent's observation.
-
-    #     Notes:
-    #         Each agent has its own critic, so the critic is no longer shared among all agents.
-    #     """
-
-    #     unique_obs_dim_list = []
-    #     n_agents = len(self.learning_role.rl_strats)
-
-    #     for _, unit_strategy in self.learning_role.rl_strats.items():
-    #         unit_strategy.critic = CriticPPO(
-    #             obs_dim=unit_strategy.obs_dim,
-    #             float_type=self.float_type,
-    #             n_agents=n_agents,
-    #             act_dim=unit_strategy.act_dim
-    #         ).to(self.device)
-
-    #         unit_strategy.critic.optimizer = Adam(
-    #             unit_strategy.critic.parameters(), lr=self.learning_rate
-    #         )
-
-    #         unique_obs_dim_list.append(unit_strategy.unique_obs_dim)
-
-    #     # Check if all unique_obs_dim are the same and raise an error if not
-    #     # If they are all the same, set the unique_obs_dim attribute
-    #     if len(set(unique_obs_dim_list)) > 1:
-    #         raise ValueError(
-    #             "All unique_obs_dim values must be the same for all RL agents"
-    #         )
-    #     else:
-    #         self.unique_obs_dim = unique_obs_dim_list[0]
-
+   
 
     def create_shared_critic(self) -> None:
         """
@@ -545,6 +484,9 @@ class PPO(RLAlgorithm):
         Returns:
             torch.Tensor: The value of the observation.
         """
+
+        #the value accomodates shared or individual critics and CTDE MAPPO or decentralized IPPO via "publicinfo"
+        #set individual values and public info = False when using a shared critic!
         buffer_length = len(all_states) # get length of all states to pass it on as batch size, since the entire buffer is used for the PPO
 
         if individual_values:
@@ -606,17 +548,16 @@ class PPO(RLAlgorithm):
             logger.debug(f"Last_advantage: {last_gae}")
             returns[t] = advantages[t] + values[t]
 
-        #Normalize advantages in accordance with spinning up and mappo version of PPO
+        #Normalize advantages in accordance with spinning up and mappo version of PPO across agents
         mean_advantages = th.nanmean(advantages)
         std_advantages = th.std(advantages)
         advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
+        # if you would like to normalize within agents, uncomment this:
         # mean_advantages = th.nanmean(advantages, dim=0, keepdim=True) 
         # std_advantages = th.std(advantages, dim=0, keepdim=True)       
         # advantages = (advantages - mean_advantages) / (std_advantages + 1e-5)
 
-        #TODO: Should we detach here? I though because of normalisation not being included in backward
-        # but unsure if this is correct
         return advantages, returns
 
 
@@ -658,7 +599,7 @@ class PPO(RLAlgorithm):
         with th.no_grad():
             # Pass the current states through the critic network to get value estimates.
             full_values = self.get_values(transitions.observations, transitions.actions)
-            #print(f"shape full_values : {full_values.shape}")
+
             # Compute advantages using Generalized Advantage Estimation (GAE)
             full_advantages, full_returns = self.get_advantages(transitions.rewards, full_values)
             
@@ -677,7 +618,6 @@ class PPO(RLAlgorithm):
         for counter in range(self.gradient_steps):
             self.n_updates += 1
             
-            # always use updated values --> check later if best
             # Iterate through over each agent's strategy
             # Each agent has its own actor. Critic (value network) is centralized.
             for i, u_id in enumerate(self.learning_role.rl_strats.keys()):
@@ -691,8 +631,6 @@ class PPO(RLAlgorithm):
                     returns = full_returns
                     old_values = full_values
                 
-                #print(f"values shape {values.shape}, \nreturn shape {returns.shape}, \nold_values shape {old_values.shape}")
-                #print(f"values.shape {values.shape}")
 
                 # Centralized
                 if not self.share_critic:
@@ -709,14 +647,13 @@ class PPO(RLAlgorithm):
                 log_probs_i = log_probs[:, i]  # Shape: (batch)
                 advantages_i = advantages[:, i] # Shape: (batch)
                 returns_i = returns if self.individual_values else returns[:,i]
-                #print(state_i[0, -1])
+
                 base_bid = None
                 if self.use_base_bid:
                     base_bid = state_i[0, -1].detach()
-                # action_distribution = actor(state_i, base_bid)[1]
+
                 action_distribution = actor(state_i)[1]
-                # if counter == 0:
-                #     print(f" u_id: {u_id}, std: {action_distribution.stddev[0]}")
+                
                 new_log_probs = action_distribution.log_prob(actions_i).sum(-1)
                 
                 entropy = action_distribution.entropy().sum(-1)
@@ -736,7 +673,7 @@ class PPO(RLAlgorithm):
                 logger.debug(f"policy_loss: {policy_loss}")
 
                 # Value loss (mean squared error between the predicted values and returns)
-                if (not self.share_critic) or (self.share_critic == True and i == 0):
+                if (not self.share_critic) or (self.share_critic == True and i == 0): #when using shared critic: update the values once
                     value_loss = F.mse_loss(returns.squeeze(), values.squeeze())
 
                     if self.value_clip_ratio is not None:
@@ -752,13 +689,6 @@ class PPO(RLAlgorithm):
                     critic.optimizer.step()
                     logger.debug(f"value loss: {value_loss}")
 
-                # Total loss: policy loss + value loss - entropy bonus
-                # euqation 9 from PPO paper multiplied with -1 to enable minimizing
-                # total_loss = (
-                #      policy_loss # added minus in policy loss calculation already
-                #     + self.vf_coef * value_loss
-                #     #- self.entropy_coef * entropy.mean()
-                # )  # Use self.vf_coef and self.entropy_coef
                 actor_loss = policy_loss #- self.entropy_coef * entropy.mean()
                 #logger.debug(f"total loss: {total_loss}")
 
@@ -770,7 +700,7 @@ class PPO(RLAlgorithm):
                 # Perform optimization step
                 actor.optimizer.step()
 
-                # wandb logging for comparisons
+                # wandb logging for comparisons, I didn't delete so it runs for sure, but feel free to delete later!
                 if self.learning_role.learning_mode and wandb.run is not None:
                     try:
                         with th.no_grad():
@@ -841,27 +771,6 @@ class PPO(RLAlgorithm):
                                     "episode/mean_reward_per_agent": th.tensor(self.agent_metrics['rewards']).mean().item(),
                                     "episode/episode_num": self.learning_role.episodes_done,
                                 }
-
-                                # values_flat = values.squeeze()
-                                # td_errors = values_flat - returns[:,i]
-
-                                # # Calculate correlation
-                                # v_mean = values_flat.mean()
-                                # v_std = values_flat.std()
-                                # r_mean = returns.mean()
-                                # r_std = returns.std()
-                                # v_centered = values_flat - v_mean
-                                # r_centered = returns - r_mean
-                                # correlation = (v_centered * r_centered).mean() / (v_std * r_std + 1e-8)
-
-                                # value_metrics = {
-                                #     "value/mean_td_error": td_errors.mean().item(),
-                                #     "value/explained_variance": 1 - (td_errors.var() / (returns.var() + 1e-8)).item(),
-                                #     "value/predicted_mean": values_flat.mean().item(),
-                                #     "value/actual_returns_mean": returns.mean().item(),
-                                #     "value/max_difference": td_errors.abs().max().item(),
-                                #     "value/correlation": correlation.item(),
-                                # }
 
                                 # Policy Updates
                                 policy_metrics = {
