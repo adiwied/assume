@@ -2,9 +2,36 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-base_case_2019:
+base_case_2019_january:
   start_date: 2019-01-01 00:00
   end_date: 2019-02-01 00:00
+  time_step: 1h
+  industrial_dsm_units: null
+  save_frequency_hours: 720
+
+  markets_config:
+    EOM:
+      operator: EOM_operator
+      product_type: energy
+      start_date: 2019-01-01 00:00
+      products:
+        - duration: 1h
+          count: 1
+          first_delivery: 1h
+      opening_frequency: 1h
+      opening_duration: 1h
+      volume_unit: MWh
+      maximum_bid_volume: 100000
+      maximum_bid_price: 3000
+      minimum_bid_price: -500
+      price_unit: EUR/MWh
+      market_mechanism: pay_as_clear
+
+
+
+base_case_2019_august:
+  start_date: 2019-08-01 00:00
+  end_date: 2019-09-01 00:00
   time_step: 1h
   industrial_dsm_units: null
   save_frequency_hours: 720
