@@ -122,7 +122,7 @@ analysis_of_trained_policies_ippo: #used to evaluate IPPO policies trained on di
 
 
 
-base_case_ppo_experimental3_correct_buffer_2019_seed46: # the MAPPO run for January 2019 evaluation
+base_case_ppo_experimental3_correct_buffer_2019_seed46: # the MAPPO run for January 2019 evaluation and commented options
   start_date: 2019-01-01 00:00
   end_date: 2019-01-31 00:00
   time_step: 1h
@@ -157,17 +157,17 @@ base_case_ppo_experimental3_correct_buffer_2019_seed46: # the MAPPO run for Janu
       train_freq: 300h # how often write_to_learning_role gets called
       gamma: 0.99 # Discount factor for future rewards
       clip_ratio: 0.05  # Clipping parameter for policy updates
-      vf_coef: 0.75  # Value function coefficient in the loss function
+      vf_coef: 0.75  # Value function coefficient in the loss function (only used in total loss)
       entropy_coef: 0.01  # Entropy coefficient for exploration
       max_grad_norm: 3 # Gradient clipping value
       gae_lambda: 0.95  # GAE lambda for advantage estimation
       batch_size: 300  # Batch size for each update, if mini-batch approach is used (currently not implemented)
       # Adjust agent information structure
-      share_critic: false
-      use_base_bid: false
-      learn_std: true
-      public_info: true
-      individual_values: true
+      share_critic: false # adjust to use parameter sharing in the critic neural network 
+      use_base_bid: false # adjust to learn difference to MC, never used! instead the NN are initialized in 
+      learn_std: true # adjust if you don't want to learn an std. 
+      public_info: true # true for MAPPO, false for IPPO
+      individual_values: true # always true in mixed setting, otherwise the loss is calculated on other agents observations too
  
   markets_config:
     EOM:
